@@ -2,20 +2,20 @@
 
 [전체 실험 계획](../EXPERIMENT_PLAN.md)은 **DSQL의 성능·개발/운영 편의성을 RDS PostgreSQL Multi-AZ 인스턴스, Aurora Provisioned, Aurora Serverless v2와 비교**합니다. DSQL을 첫 실험부터 포함하며 아래 항목은 모두 계획 상태입니다. 실행 코드와 측정 결과는 아직 없고, 개별 디렉터리는 해당 실험을 구현할 때 만듭니다.
 
-| 실험 | 확인할 질문 | 우선순위 | 상태 | 결과 |
-| --- | --- | --- | --- | --- |
-| [001 — SQL 호환성과 이관](../EXPERIMENT_PLAN.md#e001) | DSQL에서 같은 업무를 구현하려면 무엇을 바꿔야 하는가? | P0 | planned | 미측정 |
-| [002 — OLTP 처리량과 지연](../EXPERIMENT_PLAN.md#e002) | DSQL의 SLO 용량·지연은 각 대조군의 몇 배인가? | P0 | planned | 미측정 |
-| [003 — 연결과 풀링](../EXPERIMENT_PLAN.md#e003) | DSQL의 인증·연결 갱신·급증 대응에 어떤 부담이 있는가? | P0 | planned | 미측정 |
-| [004 — 트랜잭션 정합성](../EXPERIMENT_PLAN.md#e004) | DSQL의 경합·재시도는 정합성·지연·구현량에 어떤 영향을 주는가? | P0 | planned | 미측정 |
-| [005 — 읽기 확장과 최신성](../EXPERIMENT_PLAN.md#e005) | DSQL은 reader 분산 대비 성능·최신성·라우팅 작업이 어떻게 다른가? | P1 | planned | 미측정 |
-| [006 — 연결 장애와 복구](../EXPERIMENT_PLAN.md#e006) | 같은 연결 장애 뒤 업무 복구·커밋 보존·재연결 부담은? | P0 공통 / P1 서비스별 장애 | planned | 미측정 |
-| [007 — 백업과 복원](../EXPERIMENT_PLAN.md#e007) | DSQL의 복구 기능·시간·작업량은 기존 서비스와 어떻게 다른가? | P1 | planned | 미측정 |
-| [008 — 운영 작업과 성장](../EXPERIMENT_PLAN.md#e008) | DSQL의 DDL·진단·성장 대응은 얼마나 간편하며 제약은 무엇인가? | P0 기본 작업 / P1 장기 운영 | planned | 미측정 |
-| [009 — 급증·유휴 후 재개](../EXPERIMENT_PLAN.md#e009) | DSQL 대 기존 서버리스·고정 용량의 지연·수동 개입·비용은? | P0 | planned | 미측정 |
-| [010 — 비용과 선택 기준](../EXPERIMENT_PLAN.md#e010) | DSQL의 성능·편의성 이점은 어떤 비용·제약을 수반하는가? | P0 | planned | 미측정 |
-| [011 — 개발·운영 편의성](../EXPERIMENT_PLAN.md#e011) | DSQL은 초기 도입·반복 운영의 작업 시간과 수정량을 얼마나 줄이거나 늘리는가? | P0 | planned | 미측정 |
-| [012 — 대용량 조회·집계](../EXPERIMENT_PLAN.md#e012) | DSQL의 큰 쿼리 성능·OLTP 간섭·튜닝 부담은? | P1 | planned | 미측정 |
+| 실험 | 확인할 질문 | 우선순위 | 상태 | 결과 | 이슈 | 공개 보고서 |
+| --- | --- | --- | --- | --- | --- | --- |
+| [001 — SQL 호환성과 이관](../EXPERIMENT_PLAN.md#e001) | DSQL에서 같은 업무를 구현하려면 무엇을 바꿔야 하는가? | P0 | planned | 미측정 | [#1](https://github.com/roboco-io/rds-experiments/issues/1) | [보고서](https://roboco.io/rds-experiments/experiments/e001/) |
+| [002 — OLTP 처리량과 지연](../EXPERIMENT_PLAN.md#e002) | DSQL의 SLO 용량·지연은 각 대조군의 몇 배인가? | P0 | planned | 미측정 | [#2](https://github.com/roboco-io/rds-experiments/issues/2) | [보고서](https://roboco.io/rds-experiments/experiments/e002/) |
+| [003 — 연결과 풀링](../EXPERIMENT_PLAN.md#e003) | DSQL의 인증·연결 갱신·급증 대응에 어떤 부담이 있는가? | P0 | planned | 미측정 | [#3](https://github.com/roboco-io/rds-experiments/issues/3) | [보고서](https://roboco.io/rds-experiments/experiments/e003/) |
+| [004 — 트랜잭션 정합성](../EXPERIMENT_PLAN.md#e004) | DSQL의 경합·재시도는 정합성·지연·구현량에 어떤 영향을 주는가? | P0 | planned | 미측정 | [#4](https://github.com/roboco-io/rds-experiments/issues/4) | [보고서](https://roboco.io/rds-experiments/experiments/e004/) |
+| [005 — 읽기 확장과 최신성](../EXPERIMENT_PLAN.md#e005) | DSQL은 reader 분산 대비 성능·최신성·라우팅 작업이 어떻게 다른가? | P1 | planned | 미측정 | [#5](https://github.com/roboco-io/rds-experiments/issues/5) | [보고서](https://roboco.io/rds-experiments/experiments/e005/) |
+| [006 — 연결 장애와 복구](../EXPERIMENT_PLAN.md#e006) | 같은 연결 장애 뒤 업무 복구·커밋 보존·재연결 부담은? | P0 공통 / P1 서비스별 장애 | planned | 미측정 | [#6](https://github.com/roboco-io/rds-experiments/issues/6) | [보고서](https://roboco.io/rds-experiments/experiments/e006/) |
+| [007 — 백업과 복원](../EXPERIMENT_PLAN.md#e007) | DSQL의 복구 기능·시간·작업량은 기존 서비스와 어떻게 다른가? | P1 | planned | 미측정 | [#7](https://github.com/roboco-io/rds-experiments/issues/7) | [보고서](https://roboco.io/rds-experiments/experiments/e007/) |
+| [008 — 운영 작업과 성장](../EXPERIMENT_PLAN.md#e008) | DSQL의 DDL·진단·성장 대응은 얼마나 간편하며 제약은 무엇인가? | P0 기본 작업 / P1 장기 운영 | planned | 미측정 | [#8](https://github.com/roboco-io/rds-experiments/issues/8) | [보고서](https://roboco.io/rds-experiments/experiments/e008/) |
+| [009 — 급증·유휴 후 재개](../EXPERIMENT_PLAN.md#e009) | DSQL 대 기존 서버리스·고정 용량의 지연·수동 개입·비용은? | P0 | planned | 미측정 | [#9](https://github.com/roboco-io/rds-experiments/issues/9) | [보고서](https://roboco.io/rds-experiments/experiments/e009/) |
+| [010 — 비용과 선택 기준](../EXPERIMENT_PLAN.md#e010) | DSQL의 성능·편의성 이점은 어떤 비용·제약을 수반하는가? | P0 | planned | 미측정 | [#10](https://github.com/roboco-io/rds-experiments/issues/10) | [보고서](https://roboco.io/rds-experiments/experiments/e010/) |
+| [011 — 개발·운영 편의성](../EXPERIMENT_PLAN.md#e011) | DSQL은 초기 도입·반복 운영의 작업 시간과 수정량을 얼마나 줄이거나 늘리는가? | P0 | planned | 미측정 | [#11](https://github.com/roboco-io/rds-experiments/issues/11) | [보고서](https://roboco.io/rds-experiments/experiments/e011/) |
+| [012 — 대용량 조회·집계](../EXPERIMENT_PLAN.md#e012) | DSQL의 큰 쿼리 성능·OLTP 간섭·튜닝 부담은? | P1 | planned | 미측정 | [#12](https://github.com/roboco-io/rds-experiments/issues/12) | [보고서](https://roboco.io/rds-experiments/experiments/e012/) |
 
 P0는 DSQL 도입 판단을 위한 최소 비교와 필수 검증, P1은 운영·조회 특성 확대 검증입니다. R2·NVMe·스토리지 변형은 필요한 경우에만 추가합니다. 편의성과 비용은 최초 생성부터 삭제까지 수집합니다.
 

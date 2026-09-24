@@ -26,3 +26,13 @@ cdk.out/
 # Large raw measurements and logs; commit reviewed summaries separately
 artifacts/
 *.log
+
+# Local documentation build output and dependencies
+_site/
+.jekyll-cache/
+.jekyll-metadata
+.bundle/
+vendor/bundle/
+
+# Local agent implementation notes (excluded from the public site)
+docs/superpowers/

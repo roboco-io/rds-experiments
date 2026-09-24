@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository records AWS RDS and Aurora experiments on performance, constraints, and cost. It currently contains documentation only, with no application source, tests, or build system.
+This repository records AWS RDS and Aurora experiments on performance, constraints, and cost. Experiment workloads are not implemented yet. A Jekyll site publishes reviewed reports through GitHub Pages.
 
 The primary question is how Aurora DSQL compares with existing instance-based and serverless services in performance and developer/operator convenience, including compatibility tradeoffs and cost. Include DSQL in the core comparisons and record task time and manual effort alongside performance.
 
@@ -11,6 +11,8 @@ The primary question is how Aurora DSQL compares with existing instance-based an
 - `templates/experiment.md`: experiment planning and results template.
 - `experiments/README.md`: experiment index; add each experiment's path, question, status, and summary.
 - `experiments/NNN-topic/`: keep each experiment's code, configuration, instructions, and reviewed results together. Store large raw measurements in its ignored `artifacts/` directory.
+- `docs/_experiments/eNNN.md`: public report, status, and linked GitHub issue for each experiment.
+- `PUBLISHING.md`: result publication and deployment procedures; `scripts/` validates public reports and generated links.
 
 ## Build, Test, and Development Commands
 
@@ -21,7 +23,7 @@ mkdir -p experiments/001-connection-scaling
 cp templates/experiment.md experiments/001-connection-scaling/README.md
 ```
 
-These commands create an experiment directory and copy the recording template. Run `git diff --check` to check tracked edits for whitespace errors. No shared build, test, or local-server command exists; document setup, execution, validation, and cleanup commands within each experiment.
+These commands create an experiment directory and copy the recording template. Run `git diff --check` to check tracked edits for whitespace errors. Document workload setup, execution, validation, and cleanup within each experiment. For the public site, run `bundle exec ruby scripts/validate_reports.rb`, `bundle exec jekyll build --source docs --destination _site`, and `python3 scripts/check_site.py`; see `PUBLISHING.md` for setup.
 
 ## Coding Style & Naming Conventions
 
@@ -50,3 +52,7 @@ In pull requests, describe the question, changed files, reproduction commands, v
 ## Security & Configuration
 
 Keep credentials, passwords, personal data, and infrastructure state out of Git. Commit sanitized summaries and reference raw artifact locations. Record official pricing sources, verification dates, currencies, and usage; distinguish estimates from actual charges.
+
+## Public Results
+
+Track each experiment in its GitHub issue and publish reviewed Korean reports in `docs/_experiments/`. Keep the issue, experiment index, and report status consistent. Mark unmeasured fields explicitly; never invent benchmark results. A completed report must include run IDs, the execution commit, measurement date, conclusions and limitations, and verified cleanup with zero remaining resources. Pushes affecting the site on `main` trigger the Pages workflow. Verify the deployment and public report before closing the issue. Never copy raw `artifacts/` or infrastructure state into `docs/`.

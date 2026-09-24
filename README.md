@@ -6,6 +6,8 @@
 
 업무 우선순위는 **일반 OLTP → 트래픽 급증·유휴 → 대용량 조회·집계**입니다. 편의성과 비용은 첫 생성부터 삭제까지 기록하며, 세부 인스턴스·스토리지 튜닝은 DSQL 채택 판단에 필요할 때 확대합니다. 공식 문서와 대상 선정 근거는 [서비스 선정 기록](SERVICE_SELECTION.md)에 정리했습니다.
 
+**[공개 실험 노트](https://roboco.io/rds-experiments/)**에서 계획과 검토한 결과를 확인할 수 있습니다. [GitHub 이슈](https://github.com/roboco-io/rds-experiments/issues?q=is%3Aissue+label%3Aexperiment)에서 각 실험의 진행 상황을 관리합니다. 결과 작성·검증·자동 배포 방법은 [공개 절차](PUBLISHING.md)에 정리했습니다.
+
 ## 확인할 질문
 
 | 관점 | 실험으로 확인할 내용 |
@@ -23,6 +25,9 @@ rds-experiments/
 ├── INTENT.md                 # 실험 목적과 학습 기록
 ├── EXPERIMENT_PLAN.md        # 비교 대상, 공통 방법, 개별 실험 계획
 ├── SERVICE_SELECTION.md      # Exa 조사와 서비스 포함·보류 근거
+├── PUBLISHING.md             # 결과 공개·검증·배포 절차
+├── docs/                     # GitHub Pages 공개 보고서와 레이아웃
+├── scripts/                  # 공개 보고서·사이트 검증
 ├── experiments/              # 실험별 설명, 설정, 코드, 결과 요약
 │   └── README.md
 └── templates/
