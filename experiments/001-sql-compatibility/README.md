@@ -1,6 +1,6 @@
 # 001 — SQL 호환성과 실행 가능성
 
-> 상태: running (실행 도구 준비 완료, 미실행 · 측정 결과 없음)
+> 상태: completed (2026-09-24 실측 · 잔여 리소스 0 확인)
 
 ## 질문과 가설
 
@@ -112,10 +112,23 @@ aws --profile roboco --region ap-northeast-2 ec2 describe-vpcs --filters Name=ta
 - 절대 수명은 도구 수준의 거부·태그이며 AWS가 자동 삭제하지 않는다. 독립 워치독이 없으므로 프로세스·머신이 죽으면 운영자가 `cleanup`/`verify`를 직접 실행해야 한다. 만료는 각 SQL 케이스 시작 전에만 재확인하며, 실행 중인 케이스를 중단하지 않는다.
 - 태그 기반 고아 채택(EC2, D1의 DSQL `list_clusters`)은 정확한 run/config/managed-by 태그가 붙은 리소스만 대상으로 한다. 태그가 붙기 전에 실패한 리소스는 찾지 못한다. 태그 인덱스(Resource Groups Tagging API) 항목은 삭제 후에도 남을 수 있으므로 검토용으로만 기록하고, 남은 리소스 수에는 포함하지 않는다.
 
-## 실행 기록 / 성능 결과 / 제약과 동작 / 개발·운영 편의성 / 결론
+## 실행 기록
 
-미측정. 실행 후 실제 run ID·UTC 시각·코드 커밋·결과표로 채운다.
+| run ID | 구성 | 실행 시각(UTC) | 코드 커밋 |
+| --- | --- | --- | --- |
+| `20260924T071705Z-E001-D1-r01` | D1 | 07:17:05–07:17:22 | `dfbbe69` |
+| `20260924T073213Z-E001-R1-r01` | R1-lite(db.t4g.micro, Multi-AZ, 16.15) | 07:32:13–07:32:26 | `dfbbe69` |
+| `20260924T074125Z-E001-A1-r01` | A1-lite(db.t4g.medium, 16.15) | 07:41:25–07:41:38 | `dfbbe69` |
+| `20260924T075455Z-E001-A2-r01` | A2-lite(db.serverless 0.5–2 ACU, 16.15) | 07:54:55–07:55:09 | `dfbbe69` |
+
+prefix `e001-20260924t071645z-d551`. 파일럿 prefix `e001-20260924t071247z-cf9e`(D1 1회, 커밋 `48f0d65`)는 도구 점검용이며 결과 비교에 쓰지 않는다.
+
+편차: R1 프로비저닝 중 오케스트레이터 세션이 중단되어, 인스턴스 `available`(07:31:46Z) 후 manifest에 연결 정보를 보완하고 `run`/`cleanup`/`verify`를 수동으로 이어 실행했다(manifest 이벤트 `provision_done`의 `note`). R1은 `--multi-az`로 생성되었다(CloudTrail 확인). A1·A2는 `cycle`로 실행했다.
+
+## 결과·제약·편의성·결론
+
+검토한 결과표와 해석은 [공개 보고서](../../docs/_experiments/e001.md)에 있다. 요약: D1 35개 중 pass 17 / unsupported 16 / rejected_needs_review 1(`serial`) / semantic_mismatch 1(클라이언트 취소). R1·A1·A2는 DSQL 전용 `CREATE INDEX ASYNC`만 거부(42601)하고 34개 pass. 주문 트랜잭션(FK 포함)은 D1에서도 통과했다. 원본 결과는 `artifacts/<prefix>/results/`, 행렬은 `summary.md`.
 
 ## 정리 기록
 
-미실행. 실행 후 계정·리전·리소스 ID(비공개 artifacts), 삭제 결과, UTC 정리 시각, `verify` 결과(잔여 0)를 기록한다.
+계정 `roboco` 프로필, 리전 `ap-northeast-2`. 정리 완료(UTC): D1 07:18:46, R1 07:35:56, A1 07:48:12, A2 08:01:18, 삭제 실패 없음. `verify` 08:01:37Z(`d551`)·08:01:38Z(`cf9e`) 모두 `remaining_count=0`, 계정 전체 `e001` 접두어 RDS 인스턴스·클러스터·클러스터 스냅샷, DSQL 클러스터, `e001:run-prefix` 태그 VPC 0개 확인.
