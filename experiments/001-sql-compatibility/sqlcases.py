@@ -485,8 +485,30 @@ def _isolation_case(level):
     return fn
 
 
+def _begin_isolation_case(level):
+    """BEGIN ISOLATION LEVEL acceptance; SHOW is observability only and never fails the case."""
+    def fn(c):
+        c.exec(f"BEGIN ISOLATION LEVEL {level}")
+        c.check(c.scalar("SELECT 1") == 1, "statement runs inside BEGIN ISOLATION LEVEL")
+        try:
+            got = c.scalar("SHOW transaction_isolation")
+        except Exception as exc:
+            if _sqlstate(exc) not in UNSUPPORTED | REJECTED:
+                raise
+            c.steps[-1]["observability_only"] = True
+            c.rollback_quiet(c.conn)
+            c.obs.update(observed_isolation=None, isolation_observation=f"unavailable:{_sqlstate(exc)}")
+            return
+        c.exec("COMMIT")
+        c.obs.update(observed_isolation=got, isolation_observation="observed")
+        c.check(got == level.lower(), "observed level matches requested", got=got)
+    return fn
+
+
 for _lvl in ("READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE"):
-    case(f"isolation_{_lvl.lower().replace(' ', '_')}", "isolation")(_isolation_case(_lvl))
+    _key = _lvl.lower().replace(' ', '_')
+    case(f"isolation_{_key}", "SET TRANSACTION isolation syntax")(_isolation_case(_lvl))
+    case(f"isolation_begin_{_key}", "isolation")(_begin_isolation_case(_lvl))
 
 
 @case("rr_lost_update", "isolation", ["DROP TABLE IF EXISTS e001_rr"])
@@ -496,8 +518,7 @@ def _rr(c):
     a, b = c.conn, c.new_conn()
     vals = {}
     for name, conn in (("a", a), ("b", b)):
-        c.exec("BEGIN", conn=conn)
-        c.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", conn=conn)
+        c.exec("BEGIN ISOLATION LEVEL REPEATABLE READ", conn=conn)
         vals[name] = c.scalar("SELECT bal FROM e001_rr WHERE id = 1", conn=conn)
     a_err = _try_commit(c, a, [("update", "UPDATE e001_rr SET bal = %s WHERE id = 1", (vals["a"] + 10,))])
     b_err = _try_commit(c, b, [("update", "UPDATE e001_rr SET bal = %s WHERE id = 1", (vals["b"] + 20,))])

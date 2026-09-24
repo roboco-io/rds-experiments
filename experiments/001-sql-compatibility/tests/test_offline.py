@@ -47,6 +47,49 @@ class Classification(unittest.TestCase):
                 self.assertTrue(any(t in d for d in c.drops), (c.name, t))
 
 
+class FakeIsoConn:
+    def __init__(self, show_error=None):
+        self.sqls, self.show_error = [], show_error
+
+    def execute(self, sql, params=None):
+        self.sqls.append(sql)
+        if sql.startswith("SET TRANSACTION"):
+            raise AssertionError("begin case must not use SET TRANSACTION")
+        if sql.startswith("SHOW") and self.show_error:
+            exc = Exception("not supported")
+            exc.sqlstate = self.show_error
+            raise exc
+        row = ("repeatable read",) if sql.startswith("SHOW") else (1,)
+        return type("Cur", (), {"fetchone": lambda s: row})()
+
+    def cancel(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class BeginIsolation(unittest.TestCase):
+    def _run(self, name, conn):
+        fn = next(c.fn for c in Q.CASES if c.name == name)
+        ctx = Q.Ctx(lambda: conn)
+        fn(ctx)
+        return ctx
+
+    def test_begin_cases_use_own_begin_not_set_transaction(self):
+        for lvl in ("READ COMMITTED", "REPEATABLE READ", "SERIALIZABLE"):
+            conn = FakeIsoConn(show_error="0A000")
+            ctx = self._run("isolation_begin_" + lvl.lower().replace(" ", "_"), conn)
+            self.assertEqual(conn.sqls[0], f"BEGIN ISOLATION LEVEL {lvl}")
+            self.assertFalse(any("SET TRANSACTION" in s for s in conn.sqls))
+            self.assertEqual(ctx.obs["observed_isolation"], None)
+            self.assertEqual(ctx.obs["isolation_observation"], "unavailable:0A000")
+
+    def test_begin_records_observed_level(self):
+        ctx = self._run("isolation_begin_repeatable_read", FakeIsoConn())
+        self.assertEqual(ctx.obs["observed_isolation"], "repeatable read")
+
+
 class Invariants(unittest.TestCase):
     def test_lost_update(self):
         self.assertEqual(Q.lost_update_violations(100, 111, [1, 10]), [])

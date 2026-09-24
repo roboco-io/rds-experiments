@@ -21,7 +21,7 @@ SQL 기능 검사는 처리량·HA와 무관하므로 소형 구성을 사용한
 
 - 엔진 버전: `discover`가 `describe_db_engine_versions`로 16.x를 조회해 RDS·Aurora 공통 최신 minor를 우선 선택하고 `describe_orderable_db_instance_options`로 클래스 조합을 확인한다. 결과는 `artifacts/<prefix>/discovery.json`.
 - 접속: 로컬 PC → 공개 엔드포인트. **기능 검사 전용이며 지연·TPS 근거로 쓰지 않는다.**
-- 격리 수준: 각 서비스 기본값을 기록하고 격리 수준 항목에서 READ COMMITTED/REPEATABLE READ/SERIALIZABLE를 각각 요청 후 `SHOW transaction_isolation`으로 실제 적용 여부를 검사한다.
+- 격리 수준: 각 서비스 기본값을 기록한다. `isolation_begin_*`은 `BEGIN ISOLATION LEVEL X` 수용·실행(단순 SELECT)을 판정하고, `SHOW transaction_isolation`은 관측 전용으로 값이 있으면 `observed_isolation`에 기록, 미지원이면 `isolation_observation=unavailable:<SQLSTATE>`로 남긴다(수준을 단정하지 않음). 기존 `isolation_*`(`BEGIN` 후 `SET TRANSACTION`)은 "SET TRANSACTION isolation syntax" 문법 경로 항목으로, 그 실패(예: DSQL `0A000`)는 격리 수준 자체의 미지원을 뜻하지 않는다. `rr_lost_update`는 `BEGIN ISOLATION LEVEL REPEATABLE READ`를 사용한다.
 - ORM 스키마 변경·논리 복제/CDC: 선정된 요구가 없어 **미측정**으로 결과에 명시한다.
 
 ## 검사 항목 (`sqlcases.py`)
