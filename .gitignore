@@ -1,0 +1,28 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.aws/
+*.pem
+*.key
+
+# Local tools and generated infrastructure state
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+node_modules/
+cdk.out/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!*.tfvars.json.example
+
+# Large raw measurements and logs; commit reviewed summaries separately
+artifacts/
+*.log
