@@ -1,10 +1,10 @@
 # 실험 목록
 
-[전체 실험 계획](../EXPERIMENT_PLAN.md)은 **DSQL의 성능·개발/운영 편의성을 RDS PostgreSQL Multi-AZ 인스턴스, Aurora Provisioned, Aurora Serverless v2와 비교**합니다. DSQL을 첫 실험부터 포함하며 아래 항목은 모두 계획 상태입니다. 실행 코드와 측정 결과는 아직 없고, 개별 디렉터리는 해당 실험을 구현할 때 만듭니다.
+[전체 실험 계획](../EXPERIMENT_PLAN.md)은 **DSQL의 성능·개발/운영 편의성을 RDS PostgreSQL Multi-AZ 인스턴스, Aurora Provisioned, Aurora Serverless v2와 비교**합니다. DSQL을 첫 실험부터 포함합니다. E001은 실행 코드를 작성해 실측 중이며, 검토한 결과는 각 공개 보고서에 반영합니다. 나머지 항목은 계획 상태입니다.
 
 | 실험 | 확인할 질문 | 우선순위 | 상태 | 결과 | 이슈 | 공개 보고서 |
 | --- | --- | --- | --- | --- | --- | --- |
-| [001 — SQL 호환성과 이관](../EXPERIMENT_PLAN.md#e001) | DSQL에서 같은 업무를 구현하려면 무엇을 바꿔야 하는가? | P0 | planned | 미측정 | [#1](https://github.com/roboco-io/rds-experiments/issues/1) | [보고서](https://roboco.io/rds-experiments/experiments/e001/) |
+| [001 — SQL 호환성과 이관](../EXPERIMENT_PLAN.md#e001) | DSQL에서 같은 업무를 구현하려면 무엇을 바꿔야 하는가? | P0 | running | 수집 중 | [#1](https://github.com/roboco-io/rds-experiments/issues/1) | [보고서](https://roboco.io/rds-experiments/experiments/e001/) |
 | [002 — OLTP 처리량과 지연](../EXPERIMENT_PLAN.md#e002) | DSQL의 SLO 용량·지연은 각 대조군의 몇 배인가? | P0 | planned | 미측정 | [#2](https://github.com/roboco-io/rds-experiments/issues/2) | [보고서](https://roboco.io/rds-experiments/experiments/e002/) |
 | [003 — 연결과 풀링](../EXPERIMENT_PLAN.md#e003) | DSQL의 인증·연결 갱신·급증 대응에 어떤 부담이 있는가? | P0 | planned | 미측정 | [#3](https://github.com/roboco-io/rds-experiments/issues/3) | [보고서](https://roboco.io/rds-experiments/experiments/e003/) |
 | [004 — 트랜잭션 정합성](../EXPERIMENT_PLAN.md#e004) | DSQL의 경합·재시도는 정합성·지연·구현량에 어떤 영향을 주는가? | P0 | planned | 미측정 | [#4](https://github.com/roboco-io/rds-experiments/issues/4) | [보고서](https://roboco.io/rds-experiments/experiments/e004/) |
