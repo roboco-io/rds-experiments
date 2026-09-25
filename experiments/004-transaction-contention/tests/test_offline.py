@@ -172,5 +172,32 @@ class Retry(unittest.TestCase):
         self.assertFalse(R.is_ambiguous("40001", True))
 
 
+import hist as H  # noqa: E402
+
+
+class Histogram(unittest.TestCase):
+    def test_percentiles_within_one_percent(self):
+        h = H.LogHistogram()
+        for ms in range(1, 1001):
+            h.record(float(ms))
+        self.assertEqual(h.count, 1000)
+        self.assertAlmostEqual(h.percentile(50), 500, delta=500 * 0.011)
+        self.assertAlmostEqual(h.percentile(99), 990, delta=990 * 0.011)
+        self.assertEqual(h.percentile(100), 1000)
+        self.assertEqual((h.min, h.max), (1.0, 1000.0))
+
+    def test_merge_roundtrip_empty(self):
+        a, b = H.LogHistogram(), H.LogHistogram()
+        self.assertIsNone(a.percentile(50))
+        a.record(5)
+        b.record(50)
+        a.merge(b)
+        c = H.LogHistogram.from_dict(a.to_dict())
+        self.assertEqual((c.count, c.min, c.max), (2, 5, 50))
+        self.assertEqual(c.percentile(100), 50)
+        with self.assertRaises(ValueError):
+            a.merge(H.LogHistogram(precision=0.05))
+
+
 if __name__ == "__main__":
     unittest.main()
