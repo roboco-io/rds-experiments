@@ -268,6 +268,7 @@ async def _receipt_exists(h, op):
 async def run_op(h, op, isolation, policy, rng) -> Result:
     t0 = time.monotonic()
     errors, attempt = [], 0
+    after_ambiguous = False   # a lost COMMIT looked uncommitted; it may still land before our retry
     while True:
         attempt += 1
         remaining = policy.deadline_s - (time.monotonic() - t0)
@@ -299,7 +300,11 @@ async def run_op(h, op, isolation, policy, rng) -> Result:
                     return Result("committed", attempt, errors, resolved=True)
                 if state is None:
                     return Result("failed", attempt, errors, ambiguous=True, reason="unresolved")
-                retry_as = "40001"                        # confirmed not committed: retry like a conflict
+                after_ambiguous = True
+                retry_as = "40001"                        # not visible yet: retry like a conflict
+            elif st == "23505" and after_ambiguous:      # the earlier COMMIT landed late and owns the receipt
+                await h.rollback_quiet()
+                return Result("committed", attempt, errors, resolved=True)
             else:
                 await h.rollback_quiet()
                 retry_as = st

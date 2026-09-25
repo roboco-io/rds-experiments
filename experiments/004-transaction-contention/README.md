@@ -120,7 +120,9 @@
 
 - 구성별 DB는 해당 구성 실행 직후 삭제(`SkipFinalSnapshot=True`, `DeleteAutomatedBackups=True`)하고 NotFound까지 대기한다. 공통 리소스는 배치 종료 시 EC2 → 인스턴스 프로파일·역할 → 보안 그룹 → 서브넷 → IGW → VPC 순으로 삭제한다.
 - 모든 리소스에 `e004:run-prefix`·`e004:config`·`e004:expires-at`·`e004:managed-by` 태그를 붙이고, manifest에 있고 태그가 일치하는 리소스만 삭제한다.
-- `verify`는 manifest의 모든 ID, 스냅샷·보존된 자동 백업, RDS 관리 시크릿(삭제 예약 포함), IAM 역할·프로파일, Spot 요청, 이 prefix 태그의 EC2 리소스를 조회해 `remaining_count`를 계산한다. 0이어야 `completed`.
+- `verify`는 manifest의 모든 ID, 스냅샷·보존된 자동 백업, RDS 관리 시크릿, IAM 역할·프로파일, Spot 요청, 이 prefix 태그의 EC2 리소스(인스턴스·볼륨·ENI 포함)를 조회해 `remaining_count`를 계산한다. 0이어야 `completed`.
+- RDS 관리 시크릿은 RDS가 DB를 삭제할 때 함께 삭제하거나 삭제를 예약한다. 도구는 RDS가 소유한 시크릿을 직접 복원하거나 삭제하지 않는다. 삭제가 예약된 시크릿은 `secrets_pending_deletion`에 따로 기록하고 `remaining_count`에는 넣지 않는다. 다만 DB가 삭제된 뒤에도 시크릿이 삭제 예약 없이 남아 있으면 도구가 강제 삭제한다. 이 판단이 정말 맞는지는 실제 실행에서 확인해 정리 기록에 남긴다.
+- run prefix의 절대 수명 기본값은 900분(최대 960분)이다. `cycle`은 구성을 생성하기 전에, 해당 구성의 예상 소요 시간에 정리 여유 30분을 더한 시간과 남은 수명을 비교한다. 남은 수명이 부족하면 생성을 거부한다.
 
 ## 테스트
 

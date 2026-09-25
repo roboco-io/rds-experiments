@@ -40,14 +40,21 @@ def assemble(chunks: list[str], expected_len: int) -> str:
     return s
 
 
-def ssm_run(ssm, instance_id: str, commands: list[str], timeout_s: int = 900):
+def ssm_run(ssm, instance_id: str, commands: list[str], timeout_s: int = 900, check=None,
+            poll_s: float = 3, check_every_s: float = 30):
+    """Run commands and wait. `check()` is called periodically and may raise (e.g. the runner was lost),
+    because SSM can keep a terminated instance's invocation InProgress until the timeout."""
     r = ssm.send_command(InstanceIds=[instance_id], DocumentName="AWS-RunShellScript", TimeoutSeconds=60,
                          Parameters={"commands": commands, "executionTimeout": [str(timeout_s)]},
                          Comment="e004")
     cid = r["Command"]["CommandId"]
     deadline = time.monotonic() + timeout_s + 180
+    last_check = time.monotonic()
     while True:
-        time.sleep(3)
+        time.sleep(poll_s)
+        if check and time.monotonic() - last_check >= check_every_s:
+            check()
+            last_check = time.monotonic()
         try:
             inv = ssm.get_command_invocation(CommandId=cid, InstanceId=instance_id)
         except ssm.exceptions.InvocationDoesNotExist:

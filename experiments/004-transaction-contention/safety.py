@@ -22,7 +22,7 @@ TAG_CONFIG = "e004:config"
 TAG_EXPIRES = "e004:expires-at"
 TAG_MANAGED = "e004:managed-by"
 MANAGED_BY = "e004-transaction-contention-harness"
-MAX_LIFETIME_MIN = 720
+MAX_LIFETIME_MIN = 960
 # Dependents first; network last. Only these resource types are ever deleted.
 DELETION_ORDER = (
     "dsql_cluster", "db_instance", "db_cluster", "rds_secret",

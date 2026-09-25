@@ -125,14 +125,20 @@ def cmd_scenarios(target, out):
             "inconclusive": sum(r["judgement"] == "inconclusive" for r in results)}
 
 
+def gate_max_connections(target, max_connections):
+    """DSQL's connection limit is a cluster quota, not max_connections; do not gate D1 on the SHOW value."""
+    return None if target.get("kind") == "dsql" else max_connections
+
+
 def cmd_cell(target, cell_json, out):
     cell = L.Cell(**json.loads(cell_json))
-    connect = C.sync_connect_factory(target)
-    admin = connect()
     result = {"cell_id": cell.cell_id, "cell": asdict(cell), "started_at": _now(), "reason": None}
+    admin = None
     try:
+        connect = C.sync_connect_factory(target)
+        admin = connect()
         result["max_connections"] = _max_connections(admin)
-        gate = L.connection_gate(result["max_connections"], cell.concurrency)
+        gate = L.connection_gate(gate_max_connections(target, result["max_connections"]), cell.concurrency)
         if gate:
             result.update(status="not_applicable", reason=gate, ended_at=_now())
             return result
@@ -159,7 +165,8 @@ def cmd_cell(target, cell_json, out):
         return result
     finally:
         _write(out, result)
-        admin.close()
+        if admin is not None:
+            admin.close()
 
 
 def main(argv=None):

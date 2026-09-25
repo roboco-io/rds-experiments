@@ -27,7 +27,8 @@ import safety as S
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ART = os.path.join(HERE, "artifacts")
-CELL_OVERHEAD_S = 45       # reset + connections + invariants + SSM round trips per cell (estimate, re-measured)
+CELL_OVERHEAD_S = 60       # reset + connections + invariants + SSM round trips per cell (estimate, re-measured)
+LIFETIME_MARGIN_MIN = 30   # cleanup headroom required beyond a config's estimated duration
 PILOT_SAFETY = 1.25        # headroom on pilot-based DPU estimates
 CONFIG_FIXED_H = 0.75      # provision + setup + scenarios + delete per DB config (estimate)
 log = IN.log
@@ -80,6 +81,58 @@ def pilot_estimate(pilot_results, dpu_total, planned_cells, usd_per_million) -> 
 def pilot_cell_dpu(pilot, cell) -> float:
     return (PILOT_SAFETY * pilot["attempt_rate_by_concurrency"][str(cell.concurrency)]
             * (cell.warmup_s + cell.measure_s) * pilot["dpu_per_attempt"])
+
+
+def dpu_price(args, cfg, pilot):
+    """USD per million DPU: the flag if given, else the price recorded by the pilot. Required for D1."""
+    price = args.dsql_usd_per_million_dpu or (pilot or {}).get("usd_per_million_dpu")
+    if cfg != "D1":
+        return price or 0.0
+    if not price:
+        raise S.SafetyError("D1 needs --dsql-usd-per-million-dpu (or a pilot.json that recorded it)")
+    return price
+
+
+def config_minutes(cfg, reps, warmup_s, measure_s) -> float:
+    cells = len(L.plan_cells(cfg, reps, warmup_s, measure_s))
+    return (cells * (warmup_s + measure_s + CELL_OVERHEAD_S) / 3600 + CONFIG_FIXED_H) * 60
+
+
+def lifetime_problem(minutes_left, cfg, reps, warmup_s, measure_s):
+    need = config_minutes(cfg, reps, warmup_s, measure_s) + LIFETIME_MARGIN_MIN
+    if minutes_left >= need:
+        return None
+    return f"{cfg} needs about {need:.0f} min but the run prefix lifetime has {minutes_left:.0f} min left"
+
+
+def with_runner_check(fn, alive):
+    """Run fn; if it fails, ask alive() first so a lost Spot runner surfaces as RunnerLost, not a plain error."""
+    try:
+        return fn()
+    except RunnerLost:
+        raise
+    except Exception:
+        alive()
+        raise
+
+
+def retry_once(fn, on_retry):
+    try:
+        return fn()
+    except (RunnerLost, S.SafetyError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - one retry for transient runner/SSM failures
+        on_retry(exc)
+        return fn()
+
+
+def assert_config_runnable(m, cfg):
+    if m.data["config_status"].get(cfg) in ("cleaned", "cleanup_failed"):
+        raise S.SafetyError(f"{cfg} was already cleaned up in this run prefix; start a new prefix to rerun it")
+
+
+def retire_runner(m, iid):
+    m.set_state(S.BATCH, "ec2_instance", iid, "deleted", retired=True)
 
 
 def batch_estimate(reps, warmup_s, measure_s, runner_rate, pilot) -> dict:
@@ -187,11 +240,17 @@ def runner_alive(sess, m) -> str:
 
 def _ssm_ok(sess, m, cmd, timeout_s, what):
     iid = runner_alive(sess, m)
-    status, out, err = remote.ssm_run(sess.client("ssm"), iid, [cmd], timeout_s=timeout_s)
+    alive = lambda: runner_alive(sess, m)  # noqa: E731
+    status, out, err = with_runner_check(
+        lambda: remote.ssm_run(sess.client("ssm"), iid, [cmd], timeout_s=timeout_s, check=alive), alive)
     if status != "Success":
-        runner_alive(sess, m)
+        alive()
         raise RuntimeError(f"{what}: SSM {status}: {err[-300:]}")
     return iid, out
+
+
+def _fetch(sess, m, iid, path):
+    return with_runner_check(lambda: remote.fetch_file(sess.client("ssm"), iid, path), lambda: runner_alive(sess, m))
 
 
 def execute_cell(sess, m, cfg, cell) -> dict:
@@ -199,7 +258,7 @@ def execute_cell(sess, m, cfg, cell) -> dict:
     cmd = remote.runner_cmd("cell", cfg, f"--cell-json {shlex.quote(json.dumps(asdict(cell)))} --out {out_path}")
     timeout = int(L.startup_s(cell.concurrency) + cell.warmup_s + cell.measure_s + 600)
     iid, _ = _ssm_ok(sess, m, cmd, timeout, f"cell {cell.cell_id}")
-    return json.loads(remote.fetch_file(sess.client("ssm"), iid, out_path))
+    return json.loads(_fetch(sess, m, iid, out_path))
 
 
 def _refresh_a2_measured(sess, m):
@@ -219,7 +278,7 @@ def _guard_fn(sess, m, cfg, args, pilot):
             _refresh_a2_measured(sess, m)
         est = pilot_cell_dpu(pilot, cell) if (cfg == "D1" and pilot) else 0.0
         g = cost.guard(m.data, cell.warmup_s + cell.measure_s + CELL_OVERHEAD_S, est,
-                       args.dsql_usd_per_million_dpu or 0.0, cap=args.budget_cap)
+                       dpu_price(args, cfg, pilot) if cfg == "D1" else 0.0, cap=args.budget_cap)
         m.event(cfg, "guard", cell=cell.cell_id, **g)
         return g
     return guard
@@ -242,14 +301,14 @@ def do_scenarios(sess, m, cfg):
     path = f"{remote.REMOTE_ROOT}/results/scenarios-{cfg}.json"
     iid, out = _ssm_ok(sess, m, remote.runner_cmd("scenarios", cfg, f"--out {path}"), 900, "scenarios")
     S.write_private(os.path.join(run_dir(m.prefix), "scenarios", f"{cfg}.json"),
-                    json.loads(remote.fetch_file(sess.client("ssm"), iid, path)))
+                    json.loads(_fetch(sess, m, iid, path)))
     m.event(cfg, "scenarios_done", runner=out.strip()[-200:])
     _mark(m, cfg, "scenarios")
 
 
 def do_pilot(sess, m, args):
     if not args.dsql_usd_per_million_dpu:
-        raise S.SafetyError("--dsql-usd-per-million-dpu is required (official price page, run date)")
+        raise S.SafetyError("--dsql-usd-per-million-dpu is required for the pilot (official price page, run date)")
     pdir = os.path.join(run_dir(m.prefix), "results", "pilot")
     results, cells = [], pilot_cells()
     start = S.utcnow()
@@ -292,13 +351,15 @@ def do_run(sess, m, cfg, args):
     m.event(cfg, "run_start", planned=len(cells), done=len(done))
     start = S.utcnow()
 
+    price = dpu_price(args, cfg, pilot)
+
     def execute(cell):
-        res = execute_cell(sess, m, cfg, cell)
+        res = retry_once(lambda: execute_cell(sess, m, cfg, cell),
+                         lambda exc: log(f"{cell.cell_id}: retrying once after {type(exc).__name__}"))
         S.write_private(os.path.join(rdir, f"{cell.cell_id}.json"), res)
         if cfg == "D1":
             attempts = (res.get("stats") or {}).get("attempts_total", 0)
-            m.data["dsql_dpu_usd"] += cost.dpu_cost_usd(attempts * pilot["dpu_per_attempt"],
-                                                        args.dsql_usd_per_million_dpu)
+            m.data["dsql_dpu_usd"] += cost.dpu_cost_usd(attempts * pilot["dpu_per_attempt"], price)
             m.save()
         met = res.get("metrics") or {}
         log(f"{cell.cell_id}: {res['status']} tps={met.get('success_tps')} p99={met.get('p99_ms')} "
@@ -312,6 +373,11 @@ def do_run(sess, m, cfg, args):
 
 def do_cycle(sess, m, cfg, args):
     disc = m.data["discovery"]
+    assert_config_runnable(m, cfg)
+    if "provision" not in _steps(m, cfg):
+        problem = lifetime_problem(m.minutes_left(), cfg, args.reps, args.warmup_s, args.measure_s)
+        if problem:
+            raise S.SafetyError(problem)
     keep_db = False                       # True only for: Spot interruption, or D1 paused after the pilot
     try:
         if "provision" not in _steps(m, cfg):
@@ -395,7 +461,7 @@ def main(argv=None):
     p.add_argument("--config", choices=S.SCOPES)
     p.add_argument("--allow-order-override", action="store_true")
     p.add_argument("--allow-on-demand", action="store_true")
-    p.add_argument("--max-lifetime-minutes", type=int, default=660)
+    p.add_argument("--max-lifetime-minutes", type=int, default=900)
     p.add_argument("--reps", type=int, default=3)
     p.add_argument("--warmup-s", type=int, default=30)
     p.add_argument("--measure-s", type=int, default=60)
@@ -438,6 +504,8 @@ def main(argv=None):
         old = next((r for r in m.data["resources"] if r["id"] == runner), None)
         if old and IN._probe(sess, old)[0]:
             raise S.SafetyError("current runner is still alive")
+        if old:
+            retire_runner(m, old["id"])       # terminated: stop charging it in the spend estimate
         iid = IN.launch_runner(sess, m, m.data["discovery"], args.allow_on_demand)
         IN.bootstrap_runner(sess, m, iid, HERE)
     elif args.command == "estimate":

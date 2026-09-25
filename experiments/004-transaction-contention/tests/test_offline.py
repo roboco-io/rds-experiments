@@ -1,9 +1,11 @@
 """Offline tests: no AWS or database access. Run: python3 -m unittest discover -s tests -v"""
+import json
 import os
 import random
 import stat
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -600,6 +602,137 @@ class Orchestration(unittest.TestCase):
         self.assertEqual(len(rat), 1)
         self.assertAlmostEqual(rat[0]["tps_ratio_d1_over_control"], 0.5)
         self.assertAlmostEqual(rat[0]["p99_ratio_d1_over_control"], 2.0)
+
+class ReviewFixes(unittest.TestCase):
+    def test_ssm_run_aborts_when_runner_check_fails(self):
+        class Lost(Exception):
+            pass
+
+        class FakeSSM:
+            class exceptions:
+                InvocationDoesNotExist = KeyError
+
+            def send_command(self, **kw):
+                return {"Command": {"CommandId": "c1"}}
+
+            def get_command_invocation(self, **kw):
+                return {"Status": "InProgress"}
+
+        def check():
+            raise Lost()
+        t0 = time.monotonic()
+        with self.assertRaises(Lost):
+            RM.ssm_run(FakeSSM(), "i-1", ["true"], timeout_s=900, check=check, poll_s=0.01, check_every_s=0)
+        self.assertLess(time.monotonic() - t0, 5)
+
+    def test_failures_become_runner_lost_when_runner_is_gone(self):
+        def boom():
+            raise TimeoutError("ssm")
+
+        def dead():
+            raise E.RunnerLost("gone")
+        with self.assertRaises(E.RunnerLost):
+            E.with_runner_check(boom, dead)
+        with self.assertRaises(TimeoutError):
+            E.with_runner_check(boom, lambda: "i-1")
+        self.assertEqual(E.with_runner_check(lambda: 5, dead), 5)
+
+    def test_cycle_refuses_cleaned_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m = _manifest(tmp)
+            m.data["config_status"]["R1"] = "cleaned"
+            with self.assertRaises(S.SafetyError):
+                E.assert_config_runnable(m, "R1")
+            m.data["config_status"]["R1"] = "cleanup_failed"
+            with self.assertRaises(S.SafetyError):
+                E.assert_config_runnable(m, "R1")
+            m.data["config_status"]["A1"] = "provisioned"
+            E.assert_config_runnable(m, "A1")
+
+    def test_dpu_price_falls_back_to_pilot_and_is_required_for_d1(self):
+        args = type("A", (), {"dsql_usd_per_million_dpu": None})()
+        self.assertEqual(E.dpu_price(args, "D1", {"usd_per_million_dpu": 7.5}), 7.5)
+        self.assertEqual(E.dpu_price(args, "R1", None), 0.0)
+        with self.assertRaises(S.SafetyError):
+            E.dpu_price(args, "D1", None)
+        args.dsql_usd_per_million_dpu = 8.0
+        self.assertEqual(E.dpu_price(args, "D1", {"usd_per_million_dpu": 7.5}), 8.0)
+
+    def test_rds_secret_state(self):
+        self.assertEqual(IN.secret_state(None), "gone")
+        self.assertEqual(IN.secret_state({"DeletedDate": "x", "OwningService": "rds"}), "pending")
+        self.assertEqual(IN.secret_state({"OwningService": "rds"}), "live")
+
+    def test_cell_records_connect_failure_instead_of_crashing(self):
+        def bad_factory(target):
+            raise psycopg.OperationalError("throttled")
+        orig = RN.C.sync_connect_factory
+        RN.C.sync_connect_factory = bad_factory
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = os.path.join(tmp, "r.json")
+                cell = L.Cell("R1", "REPEATABLE READ", "hot", 16, "none", 1)
+                res = RN.cmd_cell({"kind": "pg", "host": "h"}, json.dumps(L.asdict(cell)), out)
+                self.assertEqual(res["status"], "error")
+                self.assertTrue(os.path.exists(out))
+        finally:
+            RN.C.sync_connect_factory = orig
+
+    def test_retry_once(self):
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("transient")
+            return "ok"
+        self.assertEqual(E.retry_once(flaky, lambda exc: None), "ok")
+
+        def lost():
+            raise E.RunnerLost("x")
+        with self.assertRaises(E.RunnerLost):
+            E.retry_once(lost, lambda exc: None)
+
+    def test_lifetime_check_uses_config_estimate(self):
+        need = E.config_minutes("A2", 3, 30, 60)
+        self.assertGreater(need, 150)
+        self.assertIsNone(E.lifetime_problem(need + 31, "A2", 3, 30, 60))
+        self.assertIn("lifetime", E.lifetime_problem(need, "A2", 3, 30, 60))
+        self.assertGreaterEqual(S.MAX_LIFETIME_MIN, 900)
+
+    def test_retired_runner_stops_accruing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m = _manifest(tmp)
+            m.add_resource(S.BATCH, "ec2_instance", "i-old", state="created", rate_usd_per_h=0.1)
+            E.retire_runner(m, "i-old")
+            self.assertEqual(C.active_rate(m.data), 0.0)
+            self.assertEqual(m.find(S.BATCH, "ec2_instance", "i-old")["state"], "deleted")
+
+    def test_late_landing_commit_is_not_a_failure(self):
+        class LateDB(_FakeDB):
+            def __init__(self):
+                super().__init__([psycopg.OperationalError("lost")], landed=False)
+                self.attempt_receipt_inserts = 0
+
+        db = LateDB()
+        orig = _FakeConn.execute
+
+        async def execute(self, sql, params=None):
+            if sql == W.INS_RECEIPT:
+                self.db.attempt_receipt_inserts += 1
+                if self.db.attempt_receipt_inserts == 2:   # the first COMMIT landed late, after the lookup
+                    raise psycopg.errors.UniqueViolation("dup")
+            return await orig(self, sql, params)
+        _FakeConn.execute = execute
+        try:
+            r = _run(db)
+        finally:
+            _FakeConn.execute = orig
+        self.assertEqual((r.outcome, r.resolved), ("committed", True))
+
+    def test_dsql_ignores_show_max_connections(self):
+        self.assertIsNone(RN.gate_max_connections({"kind": "dsql"}, 100))
+        self.assertEqual(RN.gate_max_connections({"kind": "pg"}, 100), 100)
 
 
 if __name__ == "__main__":

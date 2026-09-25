@@ -95,6 +95,13 @@ def choose_zones(db_az_sets, spot_prices) -> dict:
     return {"zones": ranked[:2], "runner_az": ranked[0], "spot_usd_per_h": spot_prices[ranked[0]]}
 
 
+def secret_state(detail) -> str:
+    """RDS deletes (or schedules deletion of) its managed secret with the DB; a scheduled one counts as deleted."""
+    if not detail:
+        return "gone"
+    return "pending" if detail.get("DeletedDate") else "live"
+
+
 def secret_owned(detail: dict, prefix: str) -> bool:
     if (detail or {}).get("OwningService") != "rds":
         return False
@@ -408,7 +415,8 @@ def _probe(sess, r):
             c = rds.describe_db_subnet_groups(DBSubnetGroupName=rid)["DBSubnetGroups"][0]
             return True, S.tags_to_dict(rds.list_tags_for_resource(ResourceName=c["DBSubnetGroupArn"])["TagList"]), c
         if t == "rds_secret":
-            return True, {}, sess.client("secretsmanager").describe_secret(SecretId=rid)
+            d = sess.client("secretsmanager").describe_secret(SecretId=rid)
+            return secret_state(d) == "live", {}, d
         if t == "ec2_instance":
             res = sess.client("ec2").describe_instances(InstanceIds=[rid])["Reservations"]
             inst = res[0]["Instances"][0] if res else None
@@ -452,15 +460,8 @@ def _delete(sess, r, detail):
         if detail["Status"] != "deleting":
             sess.client("rds").delete_db_cluster(DBClusterIdentifier=rid, SkipFinalSnapshot=True,
                                                  DeleteAutomatedBackups=True)
-    elif t == "rds_secret":
-        sm = sess.client("secretsmanager")
-        try:
-            sm.delete_secret(SecretId=rid, ForceDeleteWithoutRecovery=True)
-        except Exception as exc:  # noqa: BLE001 - already scheduled with a recovery window
-            if code(exc) != "InvalidRequestException":
-                raise
-            sm.restore_secret(SecretId=rid)
-            sm.delete_secret(SecretId=rid, ForceDeleteWithoutRecovery=True)
+    elif t == "rds_secret":  # only reached if RDS left the secret live after its DB was deleted
+        sess.client("secretsmanager").delete_secret(SecretId=rid, ForceDeleteWithoutRecovery=True)
     elif t == "ec2_instance":
         sess.client("ec2").terminate_instances(InstanceIds=[rid])
     elif t == "instance_profile":
@@ -597,8 +598,8 @@ def verify(sess, m) -> dict:
     remaining, snapshots, pending_secrets = [], [], []
     for r in m.data["resources"]:
         exists, _tags, detail = _probe(sess, r)
-        if exists and r["type"] == "rds_secret" and detail.get("DeletedDate"):
-            pending_secrets.append(r["id"])
+        if r["type"] == "rds_secret" and secret_state(detail) == "pending":
+            pending_secrets.append(r["id"])   # reported for review; scheduled by RDS, not billable as live
         elif exists:
             remaining.append({"config": r["config"], "type": r["type"], "id": r["id"]})
         checks = []
@@ -637,7 +638,7 @@ def verify(sess, m) -> dict:
               "secrets_pending_deletion": pending_secrets, "snapshots_or_retained_backups": snapshots,
               "ec2_tag_scan": tagged, "dsql_unrecorded_live": dsql_unrecorded,
               "tag_index_arns_for_review": tag_index,
-              "remaining_count": len(remaining) + len(pending_secrets) + sum(s["count"] for s in snapshots)
+              "remaining_count": len(remaining) + sum(s["count"] for s in snapshots)
               + sum(tagged.values()) + len(dsql_unrecorded)}
     return report
 
