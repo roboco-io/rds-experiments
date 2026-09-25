@@ -758,6 +758,20 @@ class PilotFixes(unittest.TestCase):
         with self.assertRaises(S.SafetyError):
             IN.spot_price_for_az(hist, "c")
 
+class RunnerSwapFixes(unittest.TestCase):
+    def test_spot_price_query_matches_the_ec2_api_model(self):
+        import botocore.session
+        members = botocore.session.get_session().get_service_model("ec2").operation_model(
+            "DescribeSpotPriceHistory").input_shape.members
+        q = IN.spot_price_query("c7g.4xlarge", "ap-northeast-2d")
+        self.assertTrue(set(q) <= set(members), set(q) - set(members))
+        self.assertEqual(q["AvailabilityZone"], "ap-northeast-2d")
+
+    def test_runner_is_recorded_before_any_post_launch_call(self):
+        import inspect
+        src = inspect.getsource(IN.launch_runner)
+        self.assertLess(src.index('m.add_resource(S.BATCH, "ec2_instance"'), src.index("describe_spot_price_history"))
+
 
 if __name__ == "__main__":
     unittest.main()

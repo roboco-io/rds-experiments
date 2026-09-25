@@ -95,6 +95,11 @@ def choose_zones(db_az_sets, spot_prices) -> dict:
     return {"zones": ranked[:2], "runner_az": ranked[0], "spot_usd_per_h": spot_prices[ranked[0]]}
 
 
+def spot_price_query(itype, az) -> dict:
+    return {"InstanceTypes": [itype], "ProductDescriptions": ["Linux/UNIX"], "AvailabilityZone": az,
+            "StartTime": S.utcnow()}
+
+
 def spot_price_for_az(history, az) -> float:
     """history: describe_spot_price_history items, newest first."""
     for h in history:
@@ -269,17 +274,19 @@ def launch_runner(sess, m, disc, allow_on_demand, itype=RUNNER_TYPE) -> str:
     if inst is None:
         raise RuntimeError("runner launch retries exhausted")
     iid = inst["InstanceId"]
-    if spot:
-        hist = ec2.describe_spot_price_history(InstanceTypes=[itype], ProductDescriptions=["Linux/UNIX"],
-                                               AvailabilityZones=[disc["runner_az"]],
-                                               StartTime=S.utcnow())["SpotPriceHistory"]
-    rate = ((spot_price_for_az(hist, disc["runner_az"]) if spot else ec2_on_demand_rate(sess, itype))
-            + cost.PUBLIC_IPV4_USD_PER_H + cost.EBS_ROOT_USD_PER_H)
+    # Record first, so a failure below can never leave an unrecorded runner behind.
     m.add_resource(S.BATCH, "ec2_instance", iid, state="created", market="spot" if spot else "on-demand",
-                   instance_type=itype,
-                   spot_request=inst.get("SpotInstanceRequestId"), az=disc["runner_az"], rate_usd_per_h=rate)
+                   instance_type=itype, spot_request=inst.get("SpotInstanceRequestId"), az=disc["runner_az"],
+                   rate_usd_per_h=disc["spot_usd_per_h"] + cost.PUBLIC_IPV4_USD_PER_H + cost.EBS_ROOT_USD_PER_H)
     m.data["runner"] = iid
     m.save()
+    try:
+        base = (spot_price_for_az(ec2.describe_spot_price_history(**spot_price_query(itype, disc["runner_az"]))[
+            "SpotPriceHistory"], disc["runner_az"]) if spot else ec2_on_demand_rate(sess, itype))
+        m.add_resource(S.BATCH, "ec2_instance", iid,
+                       rate_usd_per_h=base + cost.PUBLIC_IPV4_USD_PER_H + cost.EBS_ROOT_USD_PER_H)
+    except Exception as exc:  # noqa: BLE001 - keep the discovery-time rate; the runner is already recorded
+        log(f"runner price lookup failed ({type(exc).__name__}); keeping discovery-time rate")
     ec2.get_waiter("instance_running").wait(InstanceIds=[iid])
     wait_until(lambda: any(i["PingStatus"] == "Online" for i in ssm.describe_instance_information(
         Filters=[{"Key": "InstanceIds", "Values": [iid]}])["InstanceInformationList"]), "runner SSM online", 900)
