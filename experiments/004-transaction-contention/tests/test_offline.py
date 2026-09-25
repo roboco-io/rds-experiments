@@ -323,5 +323,139 @@ class Scenarios(unittest.TestCase):
         self.assertEqual(SC.judge("deadlock", "READ COMMITTED", "inconclusive"), "inconclusive")
 
 
+import asyncio  # noqa: E402
+import psycopg  # noqa: E402
+import load as L  # noqa: E402
+
+
+class _Cur:
+    def __init__(self, row=None, rowcount=1):
+        self.row, self.rowcount = row, rowcount
+
+    async def fetchone(self):
+        return self.row
+
+
+class _FakeDB:
+    """commit_errors: exceptions (or None for success) raised by successive COMMITs.
+    landed: an erroring COMMIT still persisted (ambiguous commit that actually happened)."""
+
+    def __init__(self, commit_errors=(), landed=False, stock_ok=True, reconnect_ok=True):
+        self.commit_errors, self.landed = list(commit_errors), landed
+        self.stock_ok, self.reconnect_ok = stock_ok, reconnect_ok
+        self.receipt, self.connects = False, 0
+
+    async def connect(self):
+        self.connects += 1
+        if self.connects > 1 and not self.reconnect_ok:
+            raise psycopg.OperationalError("down")
+        return _FakeConn(self)
+
+
+class _FakeConn:
+    def __init__(self, db):
+        self.db = db
+
+    async def execute(self, sql, params=None):
+        if sql == "COMMIT":
+            exc = self.db.commit_errors.pop(0) if self.db.commit_errors else None
+            if exc is not None:
+                if self.db.landed:
+                    self.db.receipt = True
+                raise exc
+            self.db.receipt = True
+        if sql == W.SEL_RECEIPT:
+            return _Cur(("x",) if self.db.receipt else None)
+        if sql == W.DEC_STOCK:
+            return _Cur(None, 1 if self.db.stock_ok else 0)
+        if sql == W.SEL_BALANCE:
+            return _Cur((W.INITIAL_BALANCE,))
+        return _Cur()
+
+    async def close(self):
+        pass
+
+
+def _run(db, policy="retry3", kind="order"):
+    op = (W.Op("order", "c:0:0", 0, "c", items=((1, 1),)) if kind == "order"
+          else W.Op("transfer", "c:0:0", 0, "c", transfer=(1, 2, 5)))
+
+    async def go():
+        h = L.ConnHolder(db.connect)
+        await h.open()
+        return await L.run_op(h, op, "REPEATABLE READ", R.POLICIES[policy], random.Random(0))
+    return asyncio.run(go())
+
+
+class LoadPlan(unittest.TestCase):
+    def test_matrix_sizes_and_ids(self):
+        d1, r1 = L.plan_cells("D1"), L.plan_cells("R1")
+        self.assertEqual(len(d1), 36)
+        self.assertEqual(len(r1), 54)
+        self.assertEqual(len({c.cell_id for c in r1}), 54)
+        self.assertTrue(all(c.isolation == "REPEATABLE READ" for c in d1))
+        rc = [c for c in r1 if c.isolation == "READ COMMITTED"]
+        self.assertEqual(len(rc), 18)
+        self.assertTrue(all(c.retry == "retry3" for c in rc))
+        self.assertEqual([c.cell_id for c in L.plan_cells("R1")], [c.cell_id for c in r1])  # deterministic
+        order = lambda rep: [c.cell_id.rsplit("-r", 1)[0] for c in r1 if c.rep == rep]  # noqa: E731
+        self.assertEqual(sorted(order(1)), sorted(order(2)))   # same conditions every repetition ...
+        self.assertNotEqual(order(1), order(2))                # ... in a different order
+        self.assertEqual(L.Cell("R1", "READ COMMITTED", "hot", 256, "retry3", 2).cell_id, "R1-RC-hot-c256-retry3-r2")
+
+    def test_connection_gate(self):
+        self.assertIsNone(L.connection_gate(None, 256))
+        self.assertIsNone(L.connection_gate(400, 256))
+        self.assertIn("max_connections", L.connection_gate(189, 256))
+
+
+class RunOp(unittest.TestCase):
+    def test_conflict_then_commit(self):
+        r = _run(_FakeDB([psycopg.errors.SerializationFailure("x")]))
+        self.assertEqual((r.outcome, r.attempts, r.errors), ("committed", 2, ["40001"]))
+
+    def test_no_retry_fails(self):
+        r = _run(_FakeDB([psycopg.errors.SerializationFailure("x")]), policy="none")
+        self.assertEqual((r.outcome, r.attempts, r.reason), ("failed", 1, "serialization"))
+
+    def test_ambiguous_commit_that_landed(self):
+        db = _FakeDB([psycopg.OperationalError("lost")], landed=True)
+        r = _run(db)
+        self.assertEqual((r.outcome, r.resolved, r.ambiguous, r.attempts), ("committed", True, False, 1))
+        self.assertEqual(db.connects, 2)
+
+    def test_ambiguous_commit_that_did_not_land_is_retried(self):
+        r = _run(_FakeDB([psycopg.OperationalError("lost")], landed=False))
+        self.assertEqual((r.outcome, r.attempts), ("committed", 2))
+
+    def test_ambiguous_unresolved(self):
+        r = _run(_FakeDB([psycopg.OperationalError("lost")], reconnect_ok=False))
+        self.assertEqual((r.outcome, r.ambiguous), ("failed", True))
+
+    def test_business_reject(self):
+        self.assertEqual(_run(_FakeDB(stock_ok=False)).outcome, "rejected_stock")
+        self.assertEqual(_run(_FakeDB(), kind="transfer").outcome, "committed")
+
+
+class StatsAndMetrics(unittest.TestCase):
+    def test_measure_window_and_ledger(self):
+        s = L.Stats()
+        s.record("order", L.Result("committed", 1), 5.0, in_measure=False)
+        s.record("order", L.Result("committed", 2, ["40001"]), 10.0, in_measure=True)
+        s.record("transfer", L.Result("failed", 3, ["40P01", "40P01", "40001"], reason="deadlock"), 30.0, True)
+        s.record("order", L.Result("failed", 1, ["conn"], ambiguous=True, reason="unresolved"), 2.0, True)
+        t = L.Stats.from_dict(s.to_dict())
+        t.merge(L.Stats())
+        self.assertEqual(t.ledger["order"], {"committed": 2, "ambiguous": 1})
+        self.assertEqual((t.ops_total, t.attempts_total), (4, 7))
+        m = L.metrics(t.to_dict(), measure_s=10)
+        self.assertEqual((m["ops"], m["committed"]), (3, 1))
+        self.assertAlmostEqual(m["success_tps"], 0.1)
+        self.assertAlmostEqual(m["final_failure_rate"], 2 / 3)
+        self.assertAlmostEqual(m["raw_conflict_rate"], 4 / 6)
+        self.assertEqual(m["max_ms"], 30.0)
+        self.assertIn("transfer", m["per_kind"])
+
+
 if __name__ == "__main__":
     unittest.main()
