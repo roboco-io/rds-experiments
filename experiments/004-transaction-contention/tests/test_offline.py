@@ -509,5 +509,46 @@ class Remote(unittest.TestCase):
         self.assertIn("'{\"a\": \"b c\"}'", cmd)
 
 
+import infra as IN  # noqa: E402
+
+
+class InfraPure(unittest.TestCase):
+    def test_policies(self):
+        self.assertEqual(IN.trust_policy()["Statement"][0]["Principal"], {"Service": "ec2.amazonaws.com"})
+        self.assertIsNone(IN.runner_policy([], []))
+        doc = IN.runner_policy(["arn:dsql:b", "arn:dsql:a"], ["arn:secret:x"])
+        self.assertEqual(doc["Statement"][0], {"Effect": "Allow", "Action": ["dsql:DbConnectAdmin"],
+                                               "Resource": ["arn:dsql:a", "arn:dsql:b"]})
+        self.assertEqual(doc["Statement"][1]["Action"], ["secretsmanager:GetSecretValue"])
+        self.assertNotIn('"*"', __import__("json").dumps(doc))
+
+    def test_launch_params(self):
+        tags = S.resource_tags(PFX, S.BATCH, "2026-09-25T20:00:00Z")
+        spot = IN.launch_params("ami-1", "c7g.2xlarge", "subnet-1", "sg-1", "prof", tags, spot=True)
+        self.assertEqual(spot["InstanceMarketOptions"]["SpotOptions"],
+                         {"SpotInstanceType": "one-time", "InstanceInterruptionBehavior": "terminate"})
+        self.assertNotIn("KeyName", spot)
+        self.assertEqual(spot["MetadataOptions"]["HttpTokens"], "required")
+        self.assertTrue(spot["NetworkInterfaces"][0]["AssociatePublicIpAddress"])
+        rtypes = {t["ResourceType"] for t in spot["TagSpecifications"]}
+        self.assertIn("spot-instances-request", rtypes)
+        od = IN.launch_params("ami-1", "c7g.2xlarge", "subnet-1", "sg-1", "prof", tags, spot=False)
+        self.assertNotIn("InstanceMarketOptions", od)
+        self.assertNotIn("spot-instances-request", {t["ResourceType"] for t in od["TagSpecifications"]})
+
+    def test_choose_zones(self):
+        z = IN.choose_zones([{"a", "b", "c"}, {"a", "b", "c", "d"}], {"a": 0.12, "b": 0.07, "c": 0.09, "d": 0.01})
+        self.assertEqual((z["zones"], z["runner_az"], z["spot_usd_per_h"]), (["b", "c"], "b", 0.07))
+        with self.assertRaises(S.SafetyError):
+            IN.choose_zones([{"a"}, {"a", "b"}], {"a": 0.1, "b": 0.1})
+
+    def test_secret_owned(self):
+        ok = {"OwningService": "rds", "Tags": [{"Key": "aws:rds:primaryDBClusterArn",
+                                               "Value": f"arn:aws:rds:x:1:cluster:{PFX}-a1"}]}
+        self.assertTrue(IN.secret_owned(ok, PFX))
+        self.assertFalse(IN.secret_owned({**ok, "OwningService": "other"}, PFX))
+        self.assertFalse(IN.secret_owned({"OwningService": "rds", "Tags": []}, PFX))
+
+
 if __name__ == "__main__":
     unittest.main()
