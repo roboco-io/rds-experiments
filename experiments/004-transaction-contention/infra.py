@@ -95,6 +95,14 @@ def choose_zones(db_az_sets, spot_prices) -> dict:
     return {"zones": ranked[:2], "runner_az": ranked[0], "spot_usd_per_h": spot_prices[ranked[0]]}
 
 
+def spot_price_for_az(history, az) -> float:
+    """history: describe_spot_price_history items, newest first."""
+    for h in history:
+        if h["AvailabilityZone"] == az:
+            return float(h["SpotPrice"])
+    raise S.SafetyError(f"no Spot price for {az}")
+
+
 def secret_state(detail) -> str:
     """RDS deletes (or schedules deletion of) its managed secret with the DB; a scheduled one counts as deleted."""
     if not detail:
@@ -151,9 +159,9 @@ def discover(sess) -> dict:
             "spot_prices": spot, **zones}
 
 
-def ec2_on_demand_rate(sess) -> float:
+def ec2_on_demand_rate(sess, itype=RUNNER_TYPE) -> float:
     pr = sess.client("pricing", region_name="us-east-1")
-    flt = {"regionCode": S.REGION, "instanceType": RUNNER_TYPE, "operatingSystem": "Linux", "tenancy": "Shared",
+    flt = {"regionCode": S.REGION, "instanceType": itype, "operatingSystem": "Linux", "tenancy": "Shared",
            "preInstalledSw": "NA", "capacitystatus": "Used"}
     items = pr.get_products(ServiceCode="AmazonEC2", Filters=[{"Type": "TERM_MATCH", "Field": k, "Value": v}
                                                               for k, v in flt.items()])["PriceList"]
@@ -233,7 +241,7 @@ def create_batch(sess, m, disc, allow_on_demand, root) -> None:
     m.event(S.BATCH, "provision_done")
 
 
-def launch_runner(sess, m, disc, allow_on_demand) -> str:
+def launch_runner(sess, m, disc, allow_on_demand, itype=RUNNER_TYPE) -> str:
     ec2, ssm = sess.client("ec2"), sess.client("ssm")
     tags = S.resource_tags(m.prefix, S.BATCH, m.data["expires_at"])
     ami = ssm.get_parameter(Name=AMI_PARAM)["Parameter"]["Value"]
@@ -243,7 +251,7 @@ def launch_runner(sess, m, disc, allow_on_demand) -> str:
     spot, inst = True, None
     for _ in range(12):
         try:
-            inst = ec2.run_instances(**launch_params(ami, RUNNER_TYPE, subnet, sg, profile, tags, spot))[
+            inst = ec2.run_instances(**launch_params(ami, itype, subnet, sg, profile, tags, spot))[
                 "Instances"][0]
             break
         except Exception as exc:  # noqa: BLE001
@@ -261,9 +269,14 @@ def launch_runner(sess, m, disc, allow_on_demand) -> str:
     if inst is None:
         raise RuntimeError("runner launch retries exhausted")
     iid = inst["InstanceId"]
-    rate = ((disc["spot_usd_per_h"] if spot else ec2_on_demand_rate(sess))
+    if spot:
+        hist = ec2.describe_spot_price_history(InstanceTypes=[itype], ProductDescriptions=["Linux/UNIX"],
+                                               AvailabilityZones=[disc["runner_az"]],
+                                               StartTime=S.utcnow())["SpotPriceHistory"]
+    rate = ((spot_price_for_az(hist, disc["runner_az"]) if spot else ec2_on_demand_rate(sess, itype))
             + cost.PUBLIC_IPV4_USD_PER_H + cost.EBS_ROOT_USD_PER_H)
     m.add_resource(S.BATCH, "ec2_instance", iid, state="created", market="spot" if spot else "on-demand",
+                   instance_type=itype,
                    spot_request=inst.get("SpotInstanceRequestId"), az=disc["runner_az"], rate_usd_per_h=rate)
     m.data["runner"] = iid
     m.save()
@@ -272,6 +285,18 @@ def launch_runner(sess, m, disc, allow_on_demand) -> str:
         Filters=[{"Key": "InstanceIds", "Values": [iid]}])["InstanceInformationList"]), "runner SSM online", 900)
     log(f"runner {'spot' if spot else 'on-demand'} online")
     return iid
+
+
+def terminate_runner(sess, m, iid) -> None:
+    """Terminate one live runner of this run (ownership-checked) and wait until it is gone."""
+    r = m.find(S.BATCH, "ec2_instance", iid)
+    exists, tags, detail = _probe(sess, r)
+    if exists:
+        if not S.owned(tags, m.prefix, S.BATCH):
+            raise S.SafetyError(f"{iid} lacks this run's tags; refusing to terminate")
+        _delete(sess, r, detail)
+        wait_until(lambda: not _probe(sess, r)[0], f"{iid} terminated", 900, 15)
+    m.set_state(S.BATCH, "ec2_instance", iid, "deleted", retired=True)
 
 
 def bootstrap_runner(sess, m, iid, root) -> None:

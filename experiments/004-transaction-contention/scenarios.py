@@ -120,8 +120,17 @@ def _prep(admin, statements):
         admin.execute(sql)
 
 
+PREVENTING = {"40001", "40P01", "23505"}   # serialization failure, deadlock, unique violation
+
+
 def _result(name, level, anomaly, txs, final):
     errors = [t.error for t in txs if t.error]
+    unexpected = [e for e in errors if e not in PREVENTING]
+    if unexpected:  # e.g. 42P01: the harness, not the isolation level, stopped the transaction
+        return {"scenario": name, "isolation": level, "outcome": "inconclusive", "judgement": "inconclusive",
+                "sqlstates": errors, "waited_ms": round(max(t.waited_ms for t in txs), 1),
+                "committed": [t.committed for t in txs], "final": final,
+                "error": f"unexpected SQLSTATE {','.join(unexpected)}"}
     oc = outcome_of(anomaly, errors, any(t.waited_ms > 0 for t in txs))
     return {"scenario": name, "isolation": level, "outcome": oc, "judgement": judge(name, level, oc),
             "sqlstates": errors, "waited_ms": round(max(t.waited_ms for t in txs), 1),
@@ -137,8 +146,6 @@ def _begin(a, b, level):
 
 
 def lost_update(level, a, b, admin):
-    _prep(admin, ["CREATE TABLE e004_sc_stock (id int PRIMARY KEY, qty int NOT NULL)",
-                  "INSERT INTO e004_sc_stock VALUES (1, 10)"])
     va = _value(a.do("SELECT qty FROM e004_sc_stock WHERE id = 1"))
     vb = _value(b.do("SELECT qty FROM e004_sc_stock WHERE id = 1"))
     a.do("UPDATE e004_sc_stock SET qty = %s WHERE id = 1", (va - 1,))
@@ -151,8 +158,6 @@ def lost_update(level, a, b, admin):
 
 
 def write_skew(level, a, b, admin):
-    _prep(admin, ["CREATE TABLE e004_sc_acct (id int PRIMARY KEY, bal int NOT NULL)",
-                  "INSERT INTO e004_sc_acct VALUES (1, 50), (2, 50)"])
     for t, acct in ((a, 1), (b, 2)):
         total = _value(t.do("SELECT sum(bal) FROM e004_sc_acct"))
         if total is not None and total >= 100:
@@ -165,8 +170,6 @@ def write_skew(level, a, b, admin):
 
 
 def double_order(level, a, b, admin):
-    _prep(admin, ["CREATE TABLE e004_sc_order (id int PRIMARY KEY, op_id text NOT NULL)",
-                  "CREATE TABLE e004_sc_receipt (op_id text PRIMARY KEY)"])
     a.do("SELECT op_id FROM e004_sc_receipt WHERE op_id = 'X'")
     b.do("SELECT op_id FROM e004_sc_receipt WHERE op_id = 'X'")
     a.do("INSERT INTO e004_sc_order VALUES (1, 'X')")
@@ -181,8 +184,6 @@ def double_order(level, a, b, admin):
 
 
 def deadlock(level, a, b, admin):
-    _prep(admin, ["CREATE TABLE e004_sc_pair (id int PRIMARY KEY, v int NOT NULL)",
-                  "INSERT INTO e004_sc_pair VALUES (1, 0), (2, 0)"])
     a.do("UPDATE e004_sc_pair SET v = v + 1 WHERE id = 1")
     b.do("UPDATE e004_sc_pair SET v = v + 1 WHERE id = 2")
     a.do("UPDATE e004_sc_pair SET v = v + 1 WHERE id = 2")              # PostgreSQL: blocks on b
@@ -196,8 +197,6 @@ def deadlock(level, a, b, admin):
 
 
 def for_update_decrement(level, a, b, admin):
-    _prep(admin, ["CREATE TABLE e004_sc_stock (id int PRIMARY KEY, qty int NOT NULL)",
-                  "INSERT INTO e004_sc_stock VALUES (1, 10)"])
     va = _value(a.do("SELECT qty FROM e004_sc_stock WHERE id = 1 FOR UPDATE"))
     first_b = b.do("SELECT qty FROM e004_sc_stock WHERE id = 1 FOR UPDATE")  # PostgreSQL: blocks
     a.do("UPDATE e004_sc_stock SET qty = %s WHERE id = 1", (va - 1,))
@@ -210,6 +209,22 @@ def for_update_decrement(level, a, b, admin):
     return a.committed and b.committed and final == 9, final
 
 
+# Tables are created before either transaction begins: a DSQL transaction does not see tables created
+# after it started (observed as 42P01 in the 2026-09-25 pilot).
+SETUP = {
+    "lost_update": ["CREATE TABLE e004_sc_stock (id int PRIMARY KEY, qty int NOT NULL)",
+                  "INSERT INTO e004_sc_stock VALUES (1, 10)"],
+    "write_skew": ["CREATE TABLE e004_sc_acct (id int PRIMARY KEY, bal int NOT NULL)",
+                  "INSERT INTO e004_sc_acct VALUES (1, 50), (2, 50)"],
+    "double_order": ["CREATE TABLE e004_sc_order (id int PRIMARY KEY, op_id text NOT NULL)",
+                  "CREATE TABLE e004_sc_receipt (op_id text PRIMARY KEY)"],
+    "deadlock": ["CREATE TABLE e004_sc_pair (id int PRIMARY KEY, v int NOT NULL)",
+                  "INSERT INTO e004_sc_pair VALUES (1, 0), (2, 0)"],
+    "for_update_decrement": ["CREATE TABLE e004_sc_stock (id int PRIMARY KEY, qty int NOT NULL)",
+                  "INSERT INTO e004_sc_stock VALUES (1, 10)"],
+}
+
+
 _FLOWS = {"lost_update": lost_update, "write_skew": write_skew, "double_order": double_order,
           "deadlock": deadlock, "for_update_decrement": for_update_decrement}
 _TABLES = ("e004_sc_stock", "e004_sc_acct", "e004_sc_order", "e004_sc_receipt", "e004_sc_pair")
@@ -220,6 +235,7 @@ def run_one(name, level, connect):
     a = b = None
     try:
         _prep(admin, [f"DROP TABLE IF EXISTS {t}" for t in _TABLES])
+        _prep(admin, SETUP[name])
         a, b = _Tx(connect), _Tx(connect)
         refused = _begin(a, b, level)
         if refused == "0A000":

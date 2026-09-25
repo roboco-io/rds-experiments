@@ -734,6 +734,27 @@ class ReviewFixes(unittest.TestCase):
         self.assertIsNone(RN.gate_max_connections({"kind": "dsql"}, 100))
         self.assertEqual(RN.gate_max_connections({"kind": "pg"}, 100), 100)
 
+class PilotFixes(unittest.TestCase):
+    def test_non_preventing_error_is_inconclusive(self):
+        tx = lambda err: type("T", (), {"error": err, "waited_ms": 0.0, "committed": False})()  # noqa: E731
+        r = SC._result("lost_update", "REPEATABLE READ", False, [tx("42P01"), tx("42P01")], None)
+        self.assertEqual((r["outcome"], r["judgement"]), ("inconclusive", "inconclusive"))
+        r = SC._result("lost_update", "REPEATABLE READ", False, [tx(None), tx("40001")], 9)
+        self.assertEqual((r["outcome"], r["judgement"]), ("prevented_error", "as_expected"))
+
+    def test_tables_exist_before_transactions_begin(self):
+        self.assertEqual(set(SC.SETUP), set(SC.SCENARIOS))
+        import inspect
+        for name, fn in SC._FLOWS.items():
+            self.assertNotIn("CREATE TABLE", inspect.getsource(fn), name)
+
+    def test_spot_price_for_az(self):
+        hist = [{"AvailabilityZone": "b", "SpotPrice": "0.2"}, {"AvailabilityZone": "a", "SpotPrice": "0.1"},
+                {"AvailabilityZone": "b", "SpotPrice": "0.3"}]
+        self.assertEqual(IN.spot_price_for_az(hist, "b"), 0.2)   # newest first
+        with self.assertRaises(S.SafetyError):
+            IN.spot_price_for_az(hist, "c")
+
 
 if __name__ == "__main__":
     unittest.main()

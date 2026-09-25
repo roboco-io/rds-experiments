@@ -461,6 +461,8 @@ def main(argv=None):
     p.add_argument("--config", choices=S.SCOPES)
     p.add_argument("--allow-order-override", action="store_true")
     p.add_argument("--allow-on-demand", action="store_true")
+    p.add_argument("--runner-type", default=IN.RUNNER_TYPE)
+    p.add_argument("--retire-live-runner", action="store_true", help="replace-runner: terminate a live runner first")
     p.add_argument("--max-lifetime-minutes", type=int, default=900)
     p.add_argument("--reps", type=int, default=3)
     p.add_argument("--warmup-s", type=int, default=30)
@@ -503,10 +505,12 @@ def main(argv=None):
         runner = m.data.get("runner")
         old = next((r for r in m.data["resources"] if r["id"] == runner), None)
         if old and IN._probe(sess, old)[0]:
-            raise S.SafetyError("current runner is still alive")
-        if old:
+            if not args.retire_live_runner:
+                raise S.SafetyError("current runner is still alive (use --retire-live-runner to swap it)")
+            IN.terminate_runner(sess, m, old["id"])
+        elif old and old["state"] != "deleted":
             retire_runner(m, old["id"])       # terminated: stop charging it in the spend estimate
-        iid = IN.launch_runner(sess, m, m.data["discovery"], args.allow_on_demand)
+        iid = IN.launch_runner(sess, m, m.data["discovery"], args.allow_on_demand, args.runner_type)
         IN.bootstrap_runner(sess, m, iid, HERE)
     elif args.command == "estimate":
         pilot = _load_json(os.path.join(run_dir(m.prefix), "pilot.json"))
