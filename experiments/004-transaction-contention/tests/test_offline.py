@@ -550,5 +550,57 @@ class InfraPure(unittest.TestCase):
         self.assertFalse(IN.secret_owned({"OwningService": "rds", "Tags": []}, PFX))
 
 
+import e004 as E  # noqa: E402
+
+
+def _res(cfg, iso, dist, c, retry_, rep, tps, p99, conflict=0.1, status="ok", violations=()):
+    return {"cell": {"config": cfg, "isolation": iso, "dist": dist, "concurrency": c, "retry": retry_,
+                     "rep": rep, "warmup_s": 30, "measure_s": 60},
+            "status": status, "monitor": {"lock_waiters_max": 3},
+            "metrics": {"success_tps": tps, "p50_ms": p99 / 4, "p95_ms": p99 / 2, "p99_ms": p99,
+                        "raw_conflict_rate": conflict, "final_failure_rate": 0.0},
+            "invariants": {"violations": list(violations)}}
+
+
+class Orchestration(unittest.TestCase):
+    def test_drive_skips_done_and_stops_on_guard(self):
+        cells = L.plan_cells("D1")[:4]
+        ran = []
+        E.drive(cells, {cells[0].cell_id}, lambda c: {"ok": True}, lambda c: ran.append(c.cell_id))
+        self.assertEqual(ran, [c.cell_id for c in cells[1:]])
+        ran.clear()
+        with self.assertRaises(E.BudgetStop):
+            E.drive(cells, set(), lambda c: {"ok": c is not cells[2]}, lambda c: ran.append(c.cell_id))
+        self.assertEqual(ran, [cells[0].cell_id, cells[1].cell_id])   # nothing runs at or after the stop
+
+    def test_pilot_estimate_uses_max_rate_per_concurrency(self):
+        pilot = [{"cell": {"concurrency": 16, "warmup_s": 5, "measure_s": 20}, "stats": {"attempts_total": 250}},
+                 {"cell": {"concurrency": 16, "warmup_s": 5, "measure_s": 20}, "stats": {"attempts_total": 500}},
+                 {"cell": {"concurrency": 64, "warmup_s": 5, "measure_s": 20}, "stats": {"attempts_total": 1000}}]
+        planned = [L.Cell("D1", "REPEATABLE READ", "hot", 16, "none", 1),
+                   L.Cell("D1", "REPEATABLE READ", "hot", 64, "none", 1)]
+        est = E.pilot_estimate(pilot, dpu_total=17500, planned_cells=planned, usd_per_million=10.0)
+        self.assertAlmostEqual(est["dpu_per_attempt"], 10.0)
+        self.assertEqual(est["attempt_rate_by_concurrency"], {"16": 20.0, "64": 40.0})
+        self.assertAlmostEqual(est["est_attempts"], (20 + 40) * 90 * E.PILOT_SAFETY)
+        self.assertAlmostEqual(est["est_usd"], est["est_dpu"] / 1e6 * 10.0)
+        self.assertAlmostEqual(E.pilot_cell_dpu(est, planned[1]), 40 * 90 * E.PILOT_SAFETY * 10.0)
+
+    def test_aggregate_and_ratios(self):
+        rows = E.aggregate([
+            _res("D1", "REPEATABLE READ", "hot", 64, "retry3", r, tps, 100) for r, tps in ((1, 90), (2, 100), (3, 110))
+        ] + [_res("R1", "REPEATABLE READ", "hot", 64, "retry3", r, 200, 50) for r in (1, 2, 3)]
+          + [_res("R1", "READ COMMITTED", "hot", 64, "retry3", 1, 1, 1, status="not_applicable")])
+        d1 = next(r for r in rows if r["config"] == "D1")
+        self.assertEqual(d1["success_tps"], {"median": 100, "min": 90, "max": 110, "n": 3})
+        self.assertTrue(d1["spread_over_10pct"])
+        na = next(r for r in rows if r["isolation"] == "READ COMMITTED")
+        self.assertEqual((na["ok_reps"], na["success_tps"]), (0, None))
+        rat = E.ratios(rows)
+        self.assertEqual(len(rat), 1)
+        self.assertAlmostEqual(rat[0]["tps_ratio_d1_over_control"], 0.5)
+        self.assertAlmostEqual(rat[0]["p99_ratio_d1_over_control"], 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
