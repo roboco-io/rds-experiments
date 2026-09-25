@@ -129,7 +129,36 @@
 
 ## 재현 절차
 
-구현 후 작성한다(E001과 같은 `init → discover → cycle(구성별) → summarize → verify` 흐름에 `pilot` 추가).
+전제: Python 3.10+, AWS 프로필 `roboco`, 리전 `ap-northeast-2`, session-manager-plugin(디버깅용). `<ACCOUNT>`는 사람이 확인한 12자리 계정 ID이며 모든 AWS 명령이 STS 신원과 대조한다. `<DPU_PRICE>`는 실행 당일 [Aurora DSQL 가격 페이지](https://aws.amazon.com/rds/aurora/dsql/pricing/)에서 확인한 서울 리전 백만 DPU당 USD 단가다.
+
+```bash
+cd experiments/004-transaction-contention
+python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+python3 -m unittest discover -s tests -v                    # 오프라인 테스트(AWS 호출 없음)
+
+PREFIX=$(python3 e004.py init --account-id <ACCOUNT> | tail -1)
+A="--account-id <ACCOUNT> --prefix $PREFIX --dsql-usd-per-million-dpu <DPU_PRICE>"
+python3 e004.py discover $A                                  # 읽기 전용: 버전·클래스·AZ·Spot 가격
+python3 e004.py batch-up $A                                  # VPC·SG·IAM·Spot 러너 생성과 부트스트랩(실패 시 자동 삭제)
+python3 e004.py cycle $A --config D1                         # 생성→스키마→시나리오→파일럿 후 정지(D1 유지)
+python3 e004.py estimate $A                                  # 파일럿 기반 전체 비용 추정 확인(사용자 결정)
+python3 e004.py cycle $A --config D1                         # 행렬 실행 → D1 삭제
+python3 e004.py cycle $A --config R1                         # 이하 대조군도 실행 직후 삭제
+python3 e004.py cycle $A --config A1
+python3 e004.py cycle $A --config A2
+python3 e004.py batch-down $A                                # 러너·네트워크·IAM 삭제 + verify(종료 코드 0 = 잔여 0)
+python3 e004.py summarize --prefix $PREFIX
+```
+
+- `cycle`은 성공·실패·예산 중단과 관계없이 해당 구성을 삭제한다. 예외는 두 가지다. D1 파일럿 직후에는 비용 결정을 위해 D1을 유지한다. Spot 중단(종료 코드 3)이 발생하면 재개를 위해 DB를 유지한다. Spot 중단 시에는 `replace-runner` 후 같은 `cycle`을 다시 실행하면 완료된 셀을 건너뛰고 이어서 진행한다. 재개하지 않으면 `cleanup --config <cfg>`를 즉시 실행한다.
+- 셀 시간을 줄여야 하면 모든 `cycle`에 같은 `--measure-s`/`--warmup-s`를 준다(편차로 기록).
+- 수동 교차 확인: `aws --profile roboco --region ap-northeast-2 dsql list-clusters`, `rds describe-db-instances`/`describe-db-clusters`(prefix 필터), `ec2 describe-instances --filters Name=tag:e004:run-prefix,Values=$PREFIX`, `iam get-role --role-name $PREFIX-runner`(NoSuchEntity 기대).
+
+### 검증
+
+- 오프라인 단위 테스트 47개(AWS·DB 호출 없음): `python3 -m unittest discover -s tests -v`.
+- 로컬 PostgreSQL 16 통합 테스트(2026-09-26, Docker `postgres:16`): 시나리오 15개 조합이 모두 기대표와 일치했고, 소규모 셀(동시성 8)에서 불변식 위반 0건이었다. 실행 방법은 `tests/test_pg_integration.py` 머리말에 있다.
+- 시나리오의 `waited_ms`는 도구가 트랜잭션 진행 순서를 조율하는 간격(0.5초 관찰 후 진행)에 따라 달라진다. 따라서 대기가 있었는지 여부만 해석하고, 수치를 DB 대기 시간으로 해석하지 않는다.
 
 ## 실행 기록
 
