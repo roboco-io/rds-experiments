@@ -259,5 +259,48 @@ class Workload(unittest.TestCase):
             W.begin_sql("repeatable read; DROP TABLE x")
 
 
+import invariants as I  # noqa: E402
+
+
+def _clean_facts(orders=10, transfers=5):
+    f = {k: 0 for k in I.QUERIES}
+    f.update(balance_total=W.N_ACCOUNTS * W.INITIAL_BALANCE, orders=orders, transfers=transfers)
+    return f
+
+
+class Invariants(unittest.TestCase):
+    LED = {"order": {"committed": 10, "ambiguous": 0}, "transfer": {"committed": 5, "ambiguous": 0}}
+
+    def test_clean(self):
+        self.assertEqual(I.check(_clean_facts(), self.LED, "REPEATABLE READ"), ([], []))
+
+    def test_each_violation_detected(self):
+        for key in ("neg_stock", "stock_mismatch", "account_mismatch", "orders_without_receipt",
+                    "transfers_without_receipt", "receipts_without_effect", "orders_without_items",
+                    "items_without_order", "bad_totals"):
+            f = _clean_facts()
+            f[key] = 1
+            v, _ = I.check(f, self.LED, "REPEATABLE READ")
+            self.assertTrue(any(key in x for x in v), key)
+        f = _clean_facts()
+        f["balance_total"] -= 1
+        self.assertTrue(I.check(f, self.LED, "REPEATABLE READ")[0])
+
+    def test_lost_and_unexpected_commits(self):
+        self.assertTrue(any("lost commit" in x for x in I.check(_clean_facts(orders=9), self.LED,
+                                                                 "REPEATABLE READ")[0]))
+        self.assertTrue(any("unexpected" in x for x in I.check(_clean_facts(orders=11), self.LED,
+                                                                "REPEATABLE READ")[0]))
+        led = {"order": {"committed": 10, "ambiguous": 1}, "transfer": {"committed": 5, "ambiguous": 0}}
+        self.assertEqual(I.check(_clean_facts(orders=11), led, "REPEATABLE READ"), ([], []))
+
+    def test_negative_balance_is_observation_only_under_rc(self):
+        f = _clean_facts()
+        f["neg_balance"] = 2
+        self.assertEqual(I.check(f, self.LED, "READ COMMITTED")[0], [])
+        self.assertTrue(I.check(f, self.LED, "READ COMMITTED")[1])
+        self.assertTrue(I.check(f, self.LED, "REPEATABLE READ")[0])
+
+
 if __name__ == "__main__":
     unittest.main()
