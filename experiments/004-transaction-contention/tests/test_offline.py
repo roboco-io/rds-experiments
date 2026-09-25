@@ -135,5 +135,42 @@ class Cost(unittest.TestCase):
         self.assertAlmostEqual(C.resource_usd(r, self.NOW), 0.5 + 1.04)
 
 
+import retry as R  # noqa: E402
+
+
+class Retry(unittest.TestCase):
+    def test_policies(self):
+        self.assertEqual(R.POLICIES["none"].max_attempts, 1)
+        self.assertEqual(R.POLICIES["retry3"].max_attempts, 3)
+        self.assertEqual(R.POLICIES["retry3"].deadline_s, 2.0)
+
+    def test_next_delay(self):
+        rng = random.Random(1)
+        p = R.POLICIES["retry3"]
+        self.assertIsNone(p.next_delay(1, "23505", 0.0, rng))           # not retryable
+        self.assertIsNone(R.POLICIES["none"].next_delay(1, "40001", 0.0, rng))
+        d1 = p.next_delay(1, "40001", 0.0, rng)
+        self.assertTrue(0 <= d1 <= 0.01)
+        d2 = p.next_delay(2, "40P01", 0.0, rng)
+        self.assertTrue(0 <= d2 <= 0.02)
+        self.assertIsNone(p.next_delay(3, "40001", 0.0, rng))           # attempts exhausted
+        fixed = type("FixedRng", (), {"uniform": lambda self, a, b: 0.005})()
+        self.assertEqual(p.next_delay(1, "40001", 1.99, fixed), 0.005)
+        self.assertIsNone(p.next_delay(1, "40001", 1.996, fixed))       # sleep would cross the 2 s deadline
+
+    def test_classify_and_ambiguity(self):
+        self.assertEqual(R.classify("40001"), "serialization")
+        self.assertEqual(R.classify("40P01"), "deadlock")
+        self.assertEqual(R.classify("23505"), "unique_violation")
+        self.assertEqual(R.classify(None), "connection")
+        self.assertEqual(R.classify("08006"), "connection")
+        self.assertEqual(R.classify("timeout"), "timeout")
+        self.assertEqual(R.classify("42P01"), "other")
+        self.assertTrue(R.is_ambiguous(None, True))
+        self.assertTrue(R.is_ambiguous("08006", True))
+        self.assertFalse(R.is_ambiguous(None, False))
+        self.assertFalse(R.is_ambiguous("40001", True))
+
+
 if __name__ == "__main__":
     unittest.main()
