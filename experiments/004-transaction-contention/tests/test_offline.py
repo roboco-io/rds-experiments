@@ -483,5 +483,31 @@ class ConnAndRunner(unittest.TestCase):
         self.assertAlmostEqual(RN.cpu_busy_pct((100, 1000), (150, 2000)), 95.0)
 
 
+import io  # noqa: E402
+import tarfile  # noqa: E402
+import remote as RM  # noqa: E402
+
+
+class Remote(unittest.TestCase):
+    def test_split_assemble(self):
+        s = "abc" * 10001
+        parts = RM.split(s, 7000)
+        self.assertTrue(all(len(p) <= 7000 for p in parts))
+        self.assertEqual(RM.assemble(parts, len(s)), s)
+        with self.assertRaises(RuntimeError):
+            RM.assemble(parts[:-1], len(s))
+
+    def test_bundle_contents(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        names = tarfile.open(fileobj=io.BytesIO(RM.make_bundle(root)), mode="r:gz").getnames()
+        self.assertEqual(sorted(names), sorted(RM.BUNDLE_FILES))
+        self.assertFalse(any("artifacts" in n or "test" in n for n in names))
+
+    def test_runner_cmd_quotes_json(self):
+        cmd = RM.runner_cmd("cell", "R1", "--cell-json " + RM.shlex.quote('{"a": "b c"}') + " --out /x.json")
+        self.assertIn("/opt/e004/venv/bin/python runner.py cell --target /opt/e004/target-R1.json", cmd)
+        self.assertIn("'{\"a\": \"b c\"}'", cmd)
+
+
 if __name__ == "__main__":
     unittest.main()
