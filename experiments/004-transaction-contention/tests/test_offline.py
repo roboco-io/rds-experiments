@@ -95,5 +95,45 @@ class Ordering(unittest.TestCase):
                              ["db_instance", "db_cluster", "rds_secret"])
 
 
+import cost as C  # noqa: E402
+
+
+class Cost(unittest.TestCase):
+    NOW = datetime(2026, 9, 25, 13, 0, tzinfo=timezone.utc)
+
+    def _data(self):
+        return {"dsql_dpu_usd": 0.5, "resources": [
+            {"config": "R1", "type": "db_instance", "id": "db", "state": "deleted",
+             "recorded_at": "2026-09-25T10:00:00Z", "deleted_at": "2026-09-25T12:00:00Z",
+             "extra": {"rate_usd_per_h": 0.203}},
+            {"config": "BATCH", "type": "ec2_instance", "id": "i", "state": "created",
+             "recorded_at": "2026-09-25T10:00:00Z", "extra": {"rate_usd_per_h": 0.1}},
+            {"config": "BATCH", "type": "vpc", "id": "v", "state": "created",
+             "recorded_at": "2026-09-25T10:00:00Z", "extra": {}},
+        ]}
+
+    def test_spent_includes_deleted_active_and_dpu(self):
+        self.assertAlmostEqual(C.spent_usd(self._data(), self.NOW), 0.406 + 0.3 + 0.5, places=6)
+        self.assertAlmostEqual(C.active_rate(self._data()), 0.1)
+
+    def test_guard_stops_before_cap(self):
+        g = C.guard(self._data(), 90, now=self.NOW)
+        self.assertAlmostEqual(g["next_cell_usd"], 0.1 * 90 / 3600)
+        self.assertAlmostEqual(g["reserve_usd"], 0.05)
+        self.assertTrue(g["ok"])
+        self.assertFalse(C.guard(self._data(), 90, cap=1.25, now=self.NOW)["ok"])
+
+    def test_guard_counts_dpu_estimate(self):
+        g = C.guard(self._data(), 90, est_cell_dpu=2_000_000, dpu_usd_per_million=1.0, now=self.NOW)
+        self.assertAlmostEqual(g["next_cell_usd"], 0.1 * 90 / 3600 + 2.0)
+        self.assertFalse(C.guard(self._data(), 90, est_cell_dpu=4_000_000, dpu_usd_per_million=1.0,
+                                 now=self.NOW)["ok"])
+
+    def test_measured_cost_replaces_worst_case_until_measured_point(self):
+        r = {"recorded_at": "2026-09-25T10:00:00Z", "state": "created",
+             "extra": {"rate_usd_per_h": 1.04, "measured_usd": 0.5, "measured_until": "2026-09-25T12:00:00Z"}}
+        self.assertAlmostEqual(C.resource_usd(r, self.NOW), 0.5 + 1.04)
+
+
 if __name__ == "__main__":
     unittest.main()
