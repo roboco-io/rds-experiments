@@ -199,5 +199,65 @@ class Histogram(unittest.TestCase):
             a.merge(H.LogHistogram(precision=0.05))
 
 
+import re  # noqa: E402
+import workload as W  # noqa: E402
+
+
+class Workload(unittest.TestCase):
+    def test_batches_respect_row_quota_and_cover_all_rows(self):
+        rows = {"e004_products": 0, "e004_inventory": 0, "e004_accounts": 0}
+        for sql, params in W.seed_batches():
+            table = re.search(r"INSERT INTO (\w+)", sql).group(1)
+            ncols = len(re.search(r"\(([^)]*)\) VALUES", sql).group(1).split(","))
+            n = len(params) // ncols
+            self.assertLessEqual(n, W.MAX_ROWS_PER_TXN)
+            rows[table] += n
+        self.assertEqual(rows, {"e004_products": W.N_PRODUCTS, "e004_inventory": W.N_PRODUCTS,
+                                "e004_accounts": W.N_ACCOUNTS})
+        covered = 0
+        for sql, (value, lo, hi) in W.restore_batches():
+            self.assertLessEqual(hi - lo + 1, W.MAX_ROWS_PER_TXN)
+            covered += hi - lo + 1
+        self.assertEqual(covered, W.N_PRODUCTS + W.N_ACCOUNTS)
+        for _table, _sel, _tpl, limit, rows_per_key in W.DELETE_PLANS:
+            self.assertLessEqual(limit * rows_per_key, W.MAX_ROWS_PER_TXN)
+
+    def test_hot_distribution(self):
+        rng = random.Random(7)
+        hot_n = int(W.N_PRODUCTS * W.HOT_FRACTION)
+        draws = [W.choose_key(rng, W.N_PRODUCTS, "hot") for _ in range(20000)]
+        share = sum(k <= hot_n for k in draws) / len(draws)
+        self.assertAlmostEqual(share, 0.8, delta=0.02)
+        uni = [W.choose_key(rng, W.N_PRODUCTS, "uniform") for _ in range(20000)]
+        self.assertAlmostEqual(sum(k <= hot_n for k in uni) / len(uni), 0.01, delta=0.005)
+        self.assertTrue(all(1 <= k <= W.N_PRODUCTS for k in draws + uni))
+        with self.assertRaises(ValueError):
+            W.choose_key(rng, 10, "zipf")
+
+    def test_ops_are_well_formed_and_unique(self):
+        rng = random.Random(3)
+        ops = [W.make_op(rng, "hot", "cellX", w, s) for w in range(4) for s in range(500)]
+        kinds = [o.kind for o in ops]
+        self.assertAlmostEqual(kinds.count("order") / len(ops), 0.7, delta=0.03)
+        self.assertEqual(len({o.ref_id for o in ops}), len(ops))
+        self.assertEqual(len({o.op_id for o in ops}), len(ops))
+        for o in ops:
+            if o.kind == "order":
+                pids = [p for p, _ in o.items]
+                self.assertEqual(pids, sorted(set(pids)))
+                self.assertTrue(all(1 <= q <= 3 for _, q in o.items))
+            else:
+                a, b, amt = o.transfer
+                self.assertNotEqual(a, b)
+                self.assertTrue(1 <= amt <= 100)
+        with self.assertRaises(ValueError):
+            W.ref_id(-1, 0)
+
+    def test_begin_sql(self):
+        self.assertEqual(W.begin_sql("REPEATABLE READ"), "BEGIN ISOLATION LEVEL REPEATABLE READ")
+        with self.assertRaises(ValueError):
+            W.begin_sql("repeatable read; DROP TABLE x")
+
+
 if __name__ == "__main__":
     unittest.main()
