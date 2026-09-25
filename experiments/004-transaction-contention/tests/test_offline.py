@@ -129,7 +129,10 @@ class Cost(unittest.TestCase):
         g = C.guard(self._data(), 90, est_cell_dpu=2_000_000, dpu_usd_per_million=1.0, now=self.NOW)
         self.assertAlmostEqual(g["next_cell_usd"], 0.1 * 90 / 3600 + 2.0)
         self.assertFalse(C.guard(self._data(), 90, est_cell_dpu=4_000_000, dpu_usd_per_million=1.0,
-                                 now=self.NOW)["ok"])
+                                 cap=4.5, now=self.NOW)["ok"])
+
+    def test_caps_follow_the_per_experiment_budget(self):
+        self.assertEqual((C.HARD_CAP_USD, C.BUDGET_CAP_USD), (50.0, 45.0))   # user-set 2026-09-26
 
     def test_measured_cost_replaces_worst_case_until_measured_point(self):
         r = {"recorded_at": "2026-09-25T10:00:00Z", "state": "created",

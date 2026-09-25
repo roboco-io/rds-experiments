@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from safety import parse_iso, utcnow
 
-HARD_CAP_USD = 5.0            # user-set cap (2026-09-25)
-BUDGET_CAP_USD = 4.5          # guard threshold leaves headroom for billing lag
+HARD_CAP_USD = 50.0           # user-set per-experiment cap (2026-09-26; was 5.0)
+BUDGET_CAP_USD = 45.0         # guard threshold (90%) leaves headroom for billing lag
 CLEANUP_HOURS = 0.5           # active resources keep billing while being deleted
 PUBLIC_IPV4_USD_PER_H = 0.005
 EBS_ROOT_USD_PER_H = 0.002    # 8 GiB gp3 root volume, rounded up (not separately verified)
