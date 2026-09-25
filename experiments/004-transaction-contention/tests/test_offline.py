@@ -457,5 +457,31 @@ class StatsAndMetrics(unittest.TestCase):
         self.assertIn("transfer", m["per_kind"])
 
 
+import conn as CN  # noqa: E402
+import runner as RN  # noqa: E402
+
+
+class ConnAndRunner(unittest.TestCase):
+    def test_kwargs(self):
+        dsql = {"kind": "dsql", "host": "h.dsql", "dbname": "postgres", "user": "admin", "region": S.REGION,
+                "sslrootcert": "/etc/pki/tls/certs/ca-bundle.crt"}
+        kw = CN.conn_kwargs(dsql, "admin", "tok")
+        self.assertEqual((kw["sslmode"], kw["autocommit"], kw["port"]), ("verify-full", True, 5432))
+        self.assertEqual(kw["sslrootcert"], "/etc/pki/tls/certs/ca-bundle.crt")
+        self.assertEqual(CN.conn_kwargs({"kind": "dsn", "dsn": "postgresql://x"}, None, None),
+                         {"conninfo": "postgresql://x", "autocommit": True})
+        with self.assertRaises(ValueError):
+            CN.conn_kwargs({"kind": "mysql"}, None, None)
+
+    def test_redact(self):
+        t = {"kind": "pg", "host": "db.internal", "secret_arn": "arn:aws:secretsmanager:x:1:secret:rds!abc"}
+        self.assertEqual(CN.redact("fail db.internal arn:aws:secretsmanager:x:1:secret:rds!abc", t),
+                         "fail <redacted> <redacted>")
+
+    def test_cpu_busy(self):
+        self.assertIsNone(RN.cpu_busy_pct(None, (1, 2)))
+        self.assertAlmostEqual(RN.cpu_busy_pct((100, 1000), (150, 2000)), 95.0)
+
+
 if __name__ == "__main__":
     unittest.main()
