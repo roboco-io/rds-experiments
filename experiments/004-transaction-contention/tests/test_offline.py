@@ -302,5 +302,26 @@ class Invariants(unittest.TestCase):
         self.assertTrue(I.check(f, self.LED, "REPEATABLE READ")[0])
 
 
+import scenarios as SC  # noqa: E402
+
+
+class Scenarios(unittest.TestCase):
+    def test_expected_table_complete(self):
+        for s in SC.SCENARIOS:
+            for lvl in W.LEVELS:
+                self.assertIn((s, lvl), SC.EXPECTED)
+
+    def test_outcome_and_judge(self):
+        self.assertEqual(SC.outcome_of(True, ["40001"], True), "anomaly")
+        self.assertEqual(SC.outcome_of(False, ["40001"], True), "prevented_error")
+        self.assertEqual(SC.outcome_of(False, [], True), "prevented_wait")
+        self.assertEqual(SC.outcome_of(False, [], False), "no_anomaly")
+        self.assertEqual(SC.judge("lost_update", "READ COMMITTED", "anomaly"), "as_expected")
+        self.assertEqual(SC.judge("lost_update", "REPEATABLE READ", "anomaly"), "violation")
+        self.assertEqual(SC.judge("write_skew", "REPEATABLE READ", "prevented_error"), "differs_no_violation")
+        self.assertEqual(SC.judge("deadlock", "READ COMMITTED", "not_applicable"), "not_applicable")
+        self.assertEqual(SC.judge("deadlock", "READ COMMITTED", "inconclusive"), "inconclusive")
+
+
 if __name__ == "__main__":
     unittest.main()
