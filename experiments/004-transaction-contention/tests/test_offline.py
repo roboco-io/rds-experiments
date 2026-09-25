@@ -772,6 +772,17 @@ class RunnerSwapFixes(unittest.TestCase):
         src = inspect.getsource(IN.launch_runner)
         self.assertLess(src.index('m.add_resource(S.BATCH, "ec2_instance"'), src.index("describe_spot_price_history"))
 
+class ManifestUpdates(unittest.TestCase):
+    def test_updating_extra_keeps_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m = _manifest(tmp)
+            m.add_resource(S.BATCH, "ec2_instance", "i-1", state="created", rate_usd_per_h=0.1)
+            m.add_resource(S.BATCH, "ec2_instance", "i-1", rate_usd_per_h=0.2)
+            r = m.find(S.BATCH, "ec2_instance", "i-1")
+            self.assertEqual((r["state"], r["extra"]["rate_usd_per_h"]), ("created", 0.2))
+            m.add_resource(S.BATCH, "vpc", "v-1")
+            self.assertEqual(m.find(S.BATCH, "vpc", "v-1")["state"], "requested")
+
 
 if __name__ == "__main__":
     unittest.main()

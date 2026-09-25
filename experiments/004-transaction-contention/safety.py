@@ -181,15 +181,17 @@ class Manifest:
                 return r
         return None
 
-    def add_resource(self, scope, rtype, rid, state="requested", **extra) -> dict:
+    def add_resource(self, scope, rtype, rid, state=None, **extra) -> dict:
+        """Record a resource (new ones default to "requested"); without `state`, an existing one keeps its state."""
         if scope not in SCOPES or rtype not in SCOPE_TYPES[scope]:
             raise SafetyError(f"resource type {rtype} not allowed in scope {scope}")
         r = self.find(scope, rtype, rid)
         if r is None:
-            r = {"config": scope, "type": rtype, "id": rid, "state": state,
+            r = {"config": scope, "type": rtype, "id": rid, "state": state or "requested",
                  "recorded_at": iso(utcnow()), "extra": {}}
             self.data["resources"].append(r)
-        r["state"] = state if r["state"] != "deleted" else r["state"]
+        elif state and r["state"] != "deleted":
+            r["state"] = state
         r["extra"].update(extra)
         self.save()
         return r
